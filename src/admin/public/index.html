@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SitePanel — панель управления сайтами</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🖥️</text></svg>">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <button class="brand" id="brandBtn">🖥️ <span>Site<b>Panel</b></span></button>
+    </div>
+    <div class="topbar-right">
+      <span class="sysinfo" id="sysInfo"></span>
+      <button class="btn btn-ghost" id="dashBtn">📊 Дашборд</button>
+      <button class="btn btn-ghost" id="listBtn">🗂 Сайты</button>
+      <button class="btn btn-ghost" id="settingsBtn">⚙️ Настройки</button>
+      <button class="btn btn-primary" id="addSiteBtn">+ Добавить сайт</button>
+    </div>
+  </header>
+
+  <main id="app"></main>
+
+  <!-- Модальное окно: добавление сайта -->
+  <div class="modal-backdrop hidden" id="addModal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="addTitle">
+      <h2 id="addTitle">Добавить сайт</h2>
+      <p class="hint">Загрузите .zip архив или укажите Git-репозиторий. Если внутри есть package.json со скриптом <code>start</code> — сайт определится как Node.js-приложение и будет слушать <code>process.env.PORT</code>. Иначе — статический сайт.</p>
+      <form id="addForm">
+        <div class="source-toggle">
+          <label class="checkbox"><input type="radio" name="source" value="zip" checked> ZIP-архив</label>
+          <label class="checkbox"><input type="radio" name="source" value="git"> Git-репозиторий</label>
+        </div>
+        <label>Название сайта
+          <input type="text" name="name" placeholder="my-site" autocomplete="off">
+        </label>
+        <div id="zipFields">
+          <label>ZIP-архив сайта
+            <input type="file" name="file" accept=".zip">
+          </label>
+        </div>
+        <div id="gitFields" class="hidden">
+          <label>URL репозитория
+            <input type="text" name="gitUrl" placeholder="https://github.com/user/repo.git" autocomplete="off">
+          </label>
+          <label>Ветка (необязательно, по умолчанию main/master)
+            <input type="text" name="gitBranch" placeholder="main" autocomplete="off">
+          </label>
+          <label>Подкаталог в репозитории (если сайт — папка в монорепо)
+            <input type="text" name="gitSubdir" placeholder="monitor" autocomplete="off">
+          </label>
+          <label>Токен доступа (для приватных репозиториев)
+            <input type="text" name="gitToken" placeholder="github_pat_... или ghp_..." autocomplete="off">
+          </label>
+        </div>
+        <label class="checkbox"><input type="checkbox" name="autoStart" checked> Запускать автоматически при старте панели</label>
+        <div class="modal-actions">
+          <button type="button" class="btn" data-close>Отмена</button>
+          <button type="submit" class="btn btn-primary" id="addSubmit">Загрузить и развернуть</button>
+        </div>
+        <div class="progress hidden" id="addProgress"><div class="progress-bar"></div></div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Модальное окно: подтверждение -->
+  <div class="modal-backdrop hidden" id="confirmModal">
+    <div class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmText">
+      <h2 id="confirmTitle"></h2>
+      <p class="hint" id="confirmText"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-close>Отмена</button>
+        <button type="button" class="btn btn-danger" id="confirmOk">Подтвердить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Модальное окно: ввод значения -->
+  <div class="modal-backdrop hidden" id="promptModal">
+    <div class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="promptTitle">
+      <h2 id="promptTitle"></h2>
+      <label class="sr-only" for="promptInput" id="promptInputLabel">Значение</label>
+      <input type="text" id="promptInput" autocomplete="off" aria-labelledby="promptTitle promptInputLabel">
+      <div class="modal-actions">
+        <button type="button" class="btn" data-close>Отмена</button>
+        <button type="button" class="btn btn-primary" id="promptOk">ОК</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Модальное окно: редактор файла -->
+  <div class="modal-backdrop hidden" id="editModal">
+    <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="editTitle">
+      <h2 id="editTitle"></h2>
+      <label class="sr-only" for="editArea">Содержимое файла</label>
+      <textarea id="editArea" spellcheck="false"></textarea>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-close>Отмена</button>
+        <button type="button" class="btn btn-primary" id="editSave">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toasts" role="status" aria-live="polite"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

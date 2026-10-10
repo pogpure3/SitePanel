@@ -1,0 +1,21 @@
+{
+  "name": "sitepanel",
+  "version": "1.0.0",
+  "description": "Панель управления сайтами: загрузка, домены, Let's Encrypt SSL, мониторинг, запуск/остановка/обновление",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test \"tests/**/*.test.js\""
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "acme-client": "^5.0.0",
+    "adm-zip": "^0.5.16",
+    "express": "^4.21.2",
+    "http-proxy": "^1.18.1",
+    "multer": "^2.0.2",
+    "selfsigned": "^2.4.1"
+  }
+}
