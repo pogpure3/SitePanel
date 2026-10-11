@@ -10,6 +10,7 @@ const crypto = require('crypto');
 const selfsigned = require('selfsigned');
 const { config } = require('../config');
 const store = require('../store');
+const secure = require('../securefile');
 
 const cache = new Map(); // "siteId:dir" -> { ctx, mtime }
 
@@ -28,14 +29,14 @@ function ensureDefaultCert() {
   const keyFile = path.join(dir, 'privkey.pem');
   const crtFile = path.join(dir, 'fullchain.pem');
   if (fs.existsSync(keyFile)) return;
-  fs.mkdirSync(dir, { recursive: true });
+  secure.mkdirPrivate(dir);
   const pems = selfsigned.generate([{ name: 'commonName', value: 'sitepanel.local' }], {
     days: 825,
     keySize: 2048,
     extensions: [{ name: 'subjectAltName', altNames: [{ type: 2, value: 'localhost' }, { type: 7, ip: '127.0.0.1' }] }],
   });
-  fs.writeFileSync(keyFile, pems.private);
-  fs.writeFileSync(crtFile, pems.cert);
+  secure.writePrivate(keyFile, pems.private);
+  secure.writePrivate(crtFile, pems.cert, 0o644);
 }
 
 function issueSelfSigned(site) {
@@ -65,9 +66,11 @@ function issueSelfSigned(site) {
 
 function saveCertFiles(site, keyPem, fullchainPem) {
   const dir = certDir(site);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'privkey.pem'), keyPem);
-  fs.writeFileSync(path.join(dir, 'fullchain.pem'), fullchainPem);
+  // Каталог и приватный ключ — только для владельца панели: 0644 на privkey.pem
+  // делал бы TLS-ключи читаемыми любому пользователю на машине.
+  secure.mkdirPrivate(dir);
+  secure.writePrivate(path.join(dir, 'privkey.pem'), keyPem);
+  secure.writePrivate(path.join(dir, 'fullchain.pem'), fullchainPem, 0o644);
 }
 
 function readCertFiles(site) {

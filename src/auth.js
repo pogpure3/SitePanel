@@ -3,6 +3,7 @@
 const fs = require('fs');
 const crypto = require('crypto');
 const { config } = require('./config');
+const secure = require('./securefile');
 
 // Аутентификация админки: HTTP Basic + scrypt.
 // При первом запуске генерируется случайный пароль и печатается в консоль.
@@ -23,7 +24,7 @@ function load() {
 function createInitial() {
   const password = crypto.randomBytes(9).toString('base64url');
   auth = { user: 'admin', ...hashPassword(password) };
-  fs.writeFileSync(config.authFile, JSON.stringify(auth, null, 2));
+  secure.writePrivate(config.authFile, JSON.stringify(auth, null, 2));
   console.log('');
   console.log('  ┌──────────────────────────────────────────────────┐');
   console.log('  │  Учётные данные админ-панели (первый запуск):    │');
@@ -50,7 +51,7 @@ function checkCredentials(user, password) {
 
 function changePassword(newUser, password) {
   auth = { user: newUser || auth.user, ...hashPassword(password) };
-  fs.writeFileSync(config.authFile, JSON.stringify(auth, null, 2));
+  secure.writePrivate(config.authFile, JSON.stringify(auth, null, 2));
 }
 
 // Express-мiddleware. PANEL_NO_AUTH=1 отключает проверку — для случаев,

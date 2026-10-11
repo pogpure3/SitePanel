@@ -12,6 +12,7 @@ const store = require('../store');
 const alerts = require('../alerts');
 const { withSiteLock, forgetSiteLock, outsideLock } = require('./lock');
 const { detectManager, runCommand, isLockMismatch } = require('./deployfiles');
+const secure = require('../securefile');
 
 // siteId -> { child, startedAt, stopping, restartTimer, restartAttempts }
 const processes = new Map();
@@ -548,6 +549,8 @@ async function npmInstall(site, dir = siteDir(site), opts = {}) {
  * из предыдущей версии, если в новой их нет.
  */
 const PRESERVED_FILES = ['.env', 'config.json', 'state.json'];
+// Из них секреты: копию .env не должен читать никто, кроме владельца панели.
+const SECRET_PRESERVED = new Set(['.env']);
 
 async function finalizeDeploy(site, staging, opts = {}) {
   const dir = siteDir(site);
@@ -573,7 +576,8 @@ async function finalizeDeploy(site, staging, opts = {}) {
     for (const [f, data] of Object.entries(preserved)) {
       const np = path.join(dir, f);
       if (!fs.existsSync(np)) {
-        fs.writeFileSync(np, data);
+        if (SECRET_PRESERVED.has(f)) secure.writePrivate(np, data);
+        else fs.writeFileSync(np, data);
         restored.push(f);
       }
     }

@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const { config } = require('./config');
+const secure = require('./securefile');
 
 // Простое JSON-хранилище: { sites: [], settings: {} }.
 // Запись отложенная (debounce), синхронизация при выходе.
@@ -43,7 +44,8 @@ function flush() {
   clearTimeout(saveTimer);
   saveTimer = null;
   const tmp = config.dbFile + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+  // В db.json лежат git-токены и e-mail — файл не должен быть читаем всем.
+  secure.writePrivate(tmp, JSON.stringify(state, null, 2));
   fs.renameSync(tmp, config.dbFile);
 }
 

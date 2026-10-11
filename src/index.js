@@ -19,6 +19,9 @@ const adminRoutes = require('./admin/routes');
 
 async function main() {
   ensureDirs();
+  // Ужимаем права на секреты, созданные прежними версиями (privkey.pem, .env, db.json).
+  const hardened = require('./securefile').hardenDataDir(config);
+  if (hardened > 0) console.log(`  Права на секреты обновлены: ${hardened} файл(ов)`);
   store.load();
   auth.load();
   certs.ensureDefaultCert();
