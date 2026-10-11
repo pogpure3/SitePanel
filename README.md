@@ -210,6 +210,10 @@ WantedBy=multi-user.target
 Node.js ≥ 18 (без нативных модулей), express, http-proxy, acme-client, adm-zip, multer, selfsigned.
 Фронтенд — vanilla JS без сборки.
 
+## Журнал изменений
+
+История правок по версиям — в [CHANGELOG.md](CHANGELOG.md).
+
 ## Лицензия
 
 [MIT](LICENSE) © 2026 Andrey Prokhorov
