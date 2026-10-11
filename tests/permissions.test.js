@@ -85,10 +85,42 @@ test('hardenDataDir: не падает на пустом/отсутствующ�
   assert.equal(secure.hardenDataDir({ dataDir: path.join(os.tmpdir(), 'sp-nonexistent-' + Date.now()) }), 0);
 });
 
+test('hardenDataDir: закрывает ключ аккаунта ACME (account-*.pem)', (t) => {
+  // Регрессия с реальной установки: data/acme/account-production.pem лежал как 0644.
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-acme-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const acmeDir = path.join(dataDir, 'acme');
+  fs.mkdirSync(acmeDir, { recursive: true });
+
+  const prod = path.join(acmeDir, 'account-production.pem');
+  const stage = path.join(acmeDir, 'account-staging.pem');
+  for (const f of [prod, stage]) fs.writeFileSync(f, 'ACME-KEY', { mode: 0o644 });
+
+  secure.hardenDataDir({ dataDir });
+  if (isPosix) {
+    assert.equal(modeOf(prod), 0o600, 'ключ аккаунта production должен быть 0600');
+    assert.equal(modeOf(stage), 0o600, 'ключ аккаунта staging должен быть 0600');
+  }
+});
+
+test('hardenDataDir: не трогает публичный fullchain.pem', (t) => {
+  // Публичная часть цепочки не секрет — ей положен 0644.
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-chain-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const dir = path.join(dataDir, 'certs', 's1');
+  fs.mkdirSync(dir, { recursive: true });
+  const chain = path.join(dir, 'fullchain.pem');
+  fs.writeFileSync(chain, 'CERT', { mode: 0o644 });
+
+  secure.hardenDataDir({ dataDir });
+  if (isPosix) assert.equal(modeOf(chain), 0o644, 'fullchain.pem остаётся читаемым');
+});
+
 test('исходники: секреты пишутся через secure, а не напрямую', () => {
   const root = path.join(__dirname, '..', 'src');
   const checks = [
     ['ssl/certs.js', /fs\.writeFileSync\(/, 'приватные ключи'],
+    ['ssl/acme.js', /fs\.writeFileSync\(/, 'ключ аккаунта ACME'],
     ['auth.js', /fs\.writeFileSync\(/, 'auth.json'],
     ['store.js', /fs\.writeFileSync\(/, 'db.json'],
   ];
