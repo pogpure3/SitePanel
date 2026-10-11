@@ -1,6 +1,6 @@
 {
   "name": "sitepanel",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Панель управления сайтами: загрузка, домены, Let's Encrypt SSL, мониторинг, запуск/остановка/обновление",
   "main": "src/index.js",
   "license": "MIT",
