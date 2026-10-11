@@ -10,6 +10,7 @@ const { config } = require('../config');
 const store = require('../store');
 const certs = require('./certs');
 const manager = require('../sites/manager');
+const secure = require('../securefile');
 
 // token -> keyAuthorization (живёт в памяти, нужен только на время заказа)
 const pendingChallenges = new Map();
@@ -24,10 +25,11 @@ function accountKeyFile(staging) {
 
 async function loadAccountKey(staging) {
   const file = accountKeyFile(staging);
-  fs.mkdirSync(config.acmeDir, { recursive: true });
+  secure.mkdirPrivate(config.acmeDir);
   if (fs.existsSync(file)) return fs.readFileSync(file);
   const key = await acme.crypto.createPrivateKey();
-  fs.writeFileSync(file, key);
+  // Ключ аккаунта ACME — приватный: им панель аутентифицируется в Let's Encrypt.
+  secure.writePrivate(file, key);
   return key;
 }
 

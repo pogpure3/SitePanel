@@ -95,7 +95,15 @@ function hardenDataDir(config) {
           if ((fsMod.statSync(full).mode & 0o777) > MODE.PRIVATE_DIR) fsMod.chmodSync(full, MODE.PRIVATE_DIR);
         } catch { /* не критично */ }
         walk(full, depth + 1);
-      } else if (e.name === '.env' || e.name === 'privkey.pem' || e.name === 'auth.json' || e.name === 'db.json') {
+      } else if (
+        e.name === '.env' ||
+        e.name === 'privkey.pem' ||
+        e.name === 'auth.json' ||
+        e.name === 'db.json' ||
+        // Ключ аккаунта Let's Encrypt (data/acme/account-*.pem) — тоже приватный:
+        // по нему панель аутентифицируется в ACME, утечка позволяет действовать от её имени.
+        /^account-.*\.pem$/.test(e.name)
+      ) {
         tightenIfNeeded(full, MODE.PRIVATE);
       }
     }
