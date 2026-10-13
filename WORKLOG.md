@@ -8,6 +8,83 @@
 
 ---
 
+## 2026-10-13 — Домен p.evil-mesh.ru → сайт pg (panel_beget); вычистка panel_test
+
+**Запрос.** «Перенеси домен p.evil-mesh.ru на сайт pg прод, удали сайт с тестового
+стенда и вычисти все остатки, днс уже перенесен». DNS подтверждён через 1.1.1.1:
+`p.evil-mesh.ru` и `www.p.evil-mesh.ru` → `141.133.197.43`.
+
+**Диагностика.** На panel_test домен `p.evil-mesh.ru` обслуживался **вне панели**:
+- nginx-вхост `pqr` (два server-блока: 443 → `localhost:3000` + ACME-прокси на
+  9180; 80 → 301) — файл содержал только `p.evil-mesh.ru`, `pqr.evil-mesh.ru`
+  обслуживал отдельный вхост `pqr-panel` (→ панель 8080);
+- приложение — pm2-процесс `pqr` (pid 877, `/var/www/pqr`, порт 3000), юнит
+  `pm2-root.service`;
+- `www.p.evil-mesh.ru` — certbot-блоки в `default`-вхосте (контент — заглушка
+  `/var/www/html`, 8 КБ), сертификат тот же `p.evil-mesh.ru`;
+- `www.p.evil-mesh.ru` на прод НЕ переносился (пользователь просил только
+  `p.evil-mesh.ru`); на проде для него вхоста нет → `ssl_reject_handshake`/
+  444, как у прочих неизвестных имён.
+
+**Изменения — panel_beget (продакт).**
+
+- Реестр (панель остановлена на время правки): сайту `pg` (`88b1b76605e9`)
+  добавлен домен `p.evil-mesh.ru` → domains: `["pg.evil-mesh.ru","p.evil-mesh.ru"]`.
+- nginx `/etc/nginx/sites-available/p` (+ симлинк): 80 — ACME webroot + 301 на
+  https; 443 — `p.evil-mesh.ru` → панель 8080 (шаблон pg, с WebSocket-заголовками).
+- Сертификат: `certbot certonly --webroot -w /var/www/html -d p.evil-mesh.ru` —
+  первая попытка упала (LE не смог скачать challenge — DNS для LE ещё не
+  сошёлся), повторная через минуту — успешна (`live/p.evil-mesh.ru`).
+
+**Изменения — panel_test (вычистка).**
+
+- PM2: `pm2 delete pqr` (процесс pid 877 остановлен), `pm2 save` (список пуст),
+  `pm2-root.service` stopped+disabled (других приложений в pm2 не было).
+- nginx: удалены вхосты `pqr` (= p.evil-mesh.ru, файл целиком) и
+  `mesh-monitor`; `default` переписан начисто (80 default_server, статика
+  `/var/www/html`, без certbot-блоков www.p).
+- Сертификаты: удалены `/etc/letsencrypt/{live,archive,renewal}` для
+  `m.evil-mesh.ru` и `p.evil-mesh.ru`; остались `panel` и `pqr`.
+- Панель: запись `3ebc4e88346e` (mesh-monitor) удалена из `db.json`
+  (сайтов 2 → 1), каталоги `data/sites/3ebc4e88346e{,.backup}`, логи и
+  pid-файл удалены.
+- `/var/www/pqr` удалён (38 МБ).
+
+**Бэкапы (в /root на panel_test).**
+
+- `/root/cleanup-p-m-restored-20261013-180927.tar.gz` (7.4 МБ, 3475 файлов):
+  `/var/www/pqr`, `/root/.pm2/dump.pm2.bak`, `db.json` до правки, лог монитора.
+- **Инцидент бэкапа, честно:** первый архив `cleanup-p-m-20261013-180740.tar.gz`
+  получился пустым (45 байт, 0 файлов) — tar запускался с относительными путями
+  без `-C /`, ошибки были скрыты `2>/dev/null`. Ошибка замечена сразу после
+  шага, но nginx-вхосты и сертификаты m/p к тому моменту уже были удалены.
+  Восстановительный архив снят с `-C /` для оставшегося; тело удалённого
+  вхоста `pqr` сохранено в тексте этой записи (см. выше в «Диагностике»);
+  сертификат `m.evil-mesh.ru` — есть копия на panel_beget
+  (`/etc/letsencrypt/live/m.evil-mesh.ru`); старый сертификат
+  `p.evil-mesh.ru` тестового стенда не бэкапился — но домен уже обслуживается
+  свежевыпущенным на проде, ключи отозваны де-факто удалением, при
+  необходимости LE перевыпустит. Пустой архив удалён.
+
+**Проверка.**
+
+- panel_beget: `https://p.evil-mesh.ru` → **200** (приложение pg),
+  `http://p.evil-mesh.ru` → **301** на https, `pg.evil-mesh.ru` → 200,
+  `m.evil-mesh.ru` → 401 (MeshCentral Basic), админка `beget` → 401.
+- panel_test: `pqr.evil-mesh.ru` → **200** (не затронут, панельный сайт на
+  10001 жив), админка `panel` → 401; порты 3000/10000 свободны, pm2 пуст,
+  `nginx -t` — успешен, служба панели active.
+- Реестр panel_test: единственный сайт `pqr` (running).
+
+**Осталось.**
+
+- panel_test: вхост `rm.evil-mesh.ru` (заглушка 404/ssl_reject) и сайт
+  `pqr` остаются по прежним решениям.
+- `www.p.evil-mesh.ru` на проде не обслуживается (вхоста нет) — при
+  необходимости добавить алиасом к `p`/`pg` по слову.
+
+---
+
 ## 2026-10-13 — Именование стендов: panel_test / panel_beget
 
 **Запрос.** «Для упрощения старый стенд будем называть panel_test (тестовый
