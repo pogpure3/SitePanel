@@ -1,6 +1,6 @@
 {
   "name": "sitepanel",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Панель управления сайтами: загрузка, домены, Let's Encrypt SSL, мониторинг, запуск/остановка/обновление",
   "main": "src/index.js",
   "license": "MIT",
@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "acme-client": "^5.0.0",
-    "adm-zip": "^0.5.16",
+    "adm-zip": "^0.6.1",
     "express": "^4.21.2",
     "http-proxy": "^1.18.1",
     "multer": "^2.0.2",

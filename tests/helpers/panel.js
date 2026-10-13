@@ -68,14 +68,26 @@ async function threePorts() {
 /**
  * Запускает панель.
  * @param {object} [env] дополнительные переменные окружения
- * @returns {Promise<{adminPort:number,httpPort:number,httpsPort:number,dataDir:string,base:string,stop:Function}>}
+ * @param {object} [opts]
+ * @param {Function} [opts.prepare] вызывается с каталогом данных ДО старта панели —
+ *   так тесты кладут туда битый db.json/auth.json и проверяют восстановление.
+ * @param {boolean} [opts.expectExit] панель обязана завершиться сама (аварийный
+ *   старт): ждём выход и возвращаем { exitCode, output } вместо обычного объекта.
+ * @param {{user: string, password: string}} [opts.auth] учётные данные, если тест
+ *   сам подготовил auth.json и баннера «первый запуск» в логе не будет.
+ * @returns {Promise<object>}
  */
-async function startPanel(env = {}) {
+async function startPanel(env = {}, opts = {}) {
   const [adminPort, httpPort, httpsPort] = await threePorts();
   // Свой непрерывный блок внутренних портов на каждую панель: порт 10000 занят
   // у всех сразу, а занятый чужим сервисом порт ломает запуск (EADDRINUSE).
   const internalFrom = await freePortBlock(30);
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sitepanel-test-'));
+  if (typeof opts.prepare === 'function') opts.prepare(dataDir);
+  // Авторизация в тестах API обычно не нужна — проверяем поведение, а не Basic.
+  // Но тесты, которым нужна именно она, передают PANEL_NO_AUTH: '' (пустая строка
+  // не равна '1', поэтому middleware в auth.js начинает требовать пароль).
+  const authOff = (env.PANEL_NO_AUTH === undefined ? '1' : env.PANEL_NO_AUTH) === '1';
 
   const child = spawn(process.execPath, [path.join(ROOT, 'src', 'index.js')], {
     cwd: ROOT,
@@ -86,8 +98,11 @@ async function startPanel(env = {}) {
       PANEL_HTTPS_PORT: String(httpsPort),
       PANEL_INTERNAL_PORT_FROM: String(internalFrom),
       PANEL_DATA_DIR: dataDir,
-      // Авторизация в тестах API не нужна — проверяем поведение, а не Basic.
-      PANEL_NO_AUTH: '1',
+      PANEL_NO_AUTH: authOff ? '1' : '0',
+      // Тесты не должны упираться в антибрутфорс: несколько неудачных попыток
+      // входа — часть проверок, а не атака.
+      PANEL_LOGIN_MAX_FAILS: '0',
+      PANEL_LOGIN_FAIL_DELAY_MS: '0',
       ...env,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -100,13 +115,28 @@ async function startPanel(env = {}) {
   child.stderr.on('data', (d) => { out += d.toString(); });
   child.on('exit', (code, signal) => {
     exited = true;
+    if (opts.expectExit) return;
     // Тихая смерть панели — главная причина «непонятных» ошибок в тестах.
     console.error(`\n[panel] процесс панели завершился: code=${code} signal=${signal}\n${out}\n`);
   });
 
   const base = `http://127.0.0.1:${adminPort}`;
+  const bootLog = () => out;
+
+  if (opts.expectExit) {
+    const deadline = Date.now() + 20000;
+    while (!exited && Date.now() < deadline) await sleep(100);
+    try { fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch { /* noop */ }
+    if (!exited) {
+      child.kill();
+      throw new Error(`Панель не завершилась за 20с:\n${out}`);
+    }
+    return { dataDir, exitCode: child.exitCode, output: out };
+  }
 
   // Ждём готовности админки (до 30с: на первом запуске генерируется сертификат).
+  // 401 тоже означает «готова»: с включённой авторизацией /api/system закрыт,
+  // и признаком живого процесса служит любой ответ панели, а не только 200.
   const deadline = Date.now() + 30000;
   for (;;) {
     if (child.exitCode !== null) {
@@ -116,12 +146,31 @@ async function startPanel(env = {}) {
       const res = await fetch(`${base}/api/system`, {
         headers: { 'X-Requested-With': 'XMLHttpRequest' },
       });
-      if (res.ok) break;
+      if (res.ok || res.status === 401) break;
     } catch {
       /* ещё не слушает */
     }
     if (Date.now() > deadline) throw new Error(`Панель не поднялась за 30с:\n${out}`);
     await sleep(200);
+  }
+
+  // Пароль первого запуска панель печатает в консоль — забираем его из лога,
+  // чтобы тесты могли ходить в закрытую панель.
+  // Если тест положил свой auth.json в prepare(), баннера не будет: тогда учётные
+  // данные передаются через opts.auth (иначе остаётся только парсить файл, а он
+  // как раз и является предметом проверки).
+  let auth = null;
+  if (!authOff) {
+    if (opts.auth) {
+      auth = { user: opts.auth.user, password: opts.auth.password };
+    } else {
+      const m = /Пароль:\s+(\S+)/.exec(out);
+      if (!m) {
+        child.kill();
+        throw new Error(`Не удалось прочитать сгенерированный пароль из лога панели:\n${out}`);
+      }
+      auth = { user: 'admin', password: m[1] };
+    }
   }
 
   const stop = async () => {
@@ -142,7 +191,7 @@ async function startPanel(env = {}) {
     }
   };
 
-  return { adminPort, httpPort, httpsPort, dataDir, base, stop, bootLog: () => out };
+  return { adminPort, httpPort, httpsPort, dataDir, base, auth, stop, bootLog };
 }
 
 function sleep(ms) {
@@ -162,6 +211,12 @@ function readSitePorts(dataDir) {
 /** Гасит процессы, слушающие указанные порты (чтобы тесты не оставляли сирот). */
 function killPortListeners(ports) {
   if (!ports.length) return Promise.resolve();
+  // Себя не убиваем: тест может сам слушать порт сайта (T-40 поднимает
+  // «посторонний» слушатель, чтобы проверить, что панель не тронет чужой
+  // процесс). `lsof` в этом случае вернёт pid самого тест-раннера, и прежняя
+  // версия убивала SIGKILL'ом собственный процесс ровно на этом шаге —
+  // прогон обрывался на середине файла без внятной причины.
+  const self = new Set([process.pid, process.ppid]);
   return new Promise((resolve) => {
     if (process.platform !== 'win32') {
       // POSIX: у панели отдельная группа процессов, но подстрахуемся через lsof.
@@ -171,6 +226,7 @@ function killPortListeners(ports) {
         lsof.execFile('lsof', ['-t', `-iTCP:${p}`, '-sTCP:LISTEN'], { windowsHide: true }, (err, stdout) => {
           if (!err) {
             for (const pid of String(stdout).split('\n').map((s) => parseInt(s.trim(), 10)).filter(Number.isFinite)) {
+              if (self.has(pid)) continue;
               try { process.kill(pid, 'SIGKILL'); } catch { /* уже мёртв */ }
             }
           }
@@ -190,6 +246,7 @@ function killPortListeners(ports) {
           const m = /^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i.exec(line);
           if (m && wanted.has(Number(m[1]))) pids.add(m[2]);
         }
+        for (const pid of self) pids.delete(String(pid));
         if (!pids.size) return resolve();
         let pending = pids.size;
         for (const pid of pids) {
@@ -203,8 +260,8 @@ function killPortListeners(ports) {
 }
 
 /** API-запрос с корректным CSRF-заголовком. */
-async function api(panel, method, p, body) {
-  const opts = { method, headers: { 'X-Requested-With': 'XMLHttpRequest' } };
+async function api(panel, method, p, body, extraHeaders = {}) {
+  const opts = { method, headers: { 'X-Requested-With': 'XMLHttpRequest', ...extraHeaders } };
   if (body !== undefined) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(body);

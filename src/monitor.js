@@ -50,11 +50,15 @@ async function checkSite(site) {
     lastCode: point.code,
   };
   if (site.status === 'running' && !point.ok && site.type === 'node' && !manager.isRunning(site)) {
-    manager.setStatus(site, 'crashed');
+    // Атомарная замена статуса: тик монитора стартовал ДО деплоя и видит запись
+    // в состоянии, которого уже нет. Прямая запись перетирала 'starting'/'stopped',
+    // выставленные деплоем, и роняла сайт в 'crashed' посреди работы (P-26).
+    // setStatusIf применит переход, только если статус всё ещё 'running'.
+    manager.setStatusIf(site, 'running', 'crashed');
   }
   // Самолечение: процесс жив, а статус завис в crashed (например, после сбоя панели).
   if (site.status === 'crashed' && manager.isRunning(site)) {
-    manager.setStatus(site, 'running');
+    manager.setStatusIf(site, 'crashed', 'running');
   }
   store.save();
   return point;
@@ -126,10 +130,15 @@ function processMemoryMb(pid) {
 async function statsFor(site) {
   if (site.type !== 'node' || !manager.isRunning(site)) return null;
   const proc = manager.getProcessInfo(site);
-  if (!proc || !proc.child.pid) return null;
-  const memoryMb = await processMemoryMb(proc.child.pid);
+  // У подхваченного после перезапуска панели процесса (external) есть только pid,
+  // а child === null — прежняя проверка `proc.child.pid` падала с
+  // «Cannot read properties of null (reading 'pid')» и карточка сайта отдавала 500 (SP-04).
+  if (!proc) return null;
+  const pid = proc.child ? proc.child.pid : proc.pid;
+  if (!pid) return null;
+  const memoryMb = await processMemoryMb(pid);
   return {
-    pid: proc.child.pid,
+    pid,
     uptimeSec: Math.round((Date.now() - proc.startedAt) / 1000),
     memoryMb,
   };

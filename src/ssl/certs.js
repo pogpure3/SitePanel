@@ -24,6 +24,13 @@ function defaultDir() {
 
 /* ---------- Self-signed ---------- */
 
+// Параметры self-signed. algorithm задаём явно: у selfsigned по умолчанию
+// 'sha1', и сертификат с подписью SHA-1 современные клиенты (Chrome, Firefox,
+// curl с OpenSSL 3) отвергают на уровне рукопожатия, ещё до проверки цепочки.
+// Симптом ровно такой: `curl https://127.0.0.1:8443/` падает с
+// `TLS alert handshake failure`, хотя `openssl s_client` соединение устанавливает.
+const SIGN_ALGORITHM = 'sha256';
+
 function ensureDefaultCert() {
   const dir = defaultDir();
   const keyFile = path.join(dir, 'privkey.pem');
@@ -33,6 +40,7 @@ function ensureDefaultCert() {
   const pems = selfsigned.generate([{ name: 'commonName', value: 'sitepanel.local' }], {
     days: 825,
     keySize: 2048,
+    algorithm: SIGN_ALGORITHM,
     extensions: [{ name: 'subjectAltName', altNames: [{ type: 2, value: 'localhost' }, { type: 7, ip: '127.0.0.1' }] }],
   });
   secure.writePrivate(keyFile, pems.private);
@@ -48,6 +56,7 @@ function issueSelfSigned(site) {
   const pems = selfsigned.generate([{ name: 'commonName', value: domains[0].replace('*.', 'wild.') }], {
     days: 825,
     keySize: 2048,
+    algorithm: SIGN_ALGORITHM,
     extensions: [{ name: 'subjectAltName', altNames }],
   });
   saveCertFiles(site, pems.private, pems.cert);
@@ -109,11 +118,7 @@ function buildContext(site, fallback) {
     }
   }
   if (!ctx) {
-    const def = {
-      key: fs.readFileSync(path.join(defaultDir(), 'privkey.pem')),
-      cert: fs.readFileSync(path.join(defaultDir(), 'fullchain.pem')),
-    };
-    ctx = tls.createSecureContext(def);
+    ctx = tls.createSecureContext(defaultCertFiles());
   }
   cache.set(cacheKey, { ctx, stamp });
   return ctx;
@@ -151,6 +156,17 @@ function certExpiresAt(pem) {
   }
 }
 
+// Файлы сертификата по умолчанию. Нужны как «контекст по умолчанию» для
+// https-сервера: без явных key/cert клиент, не приславший SNI (запрос по IP),
+// получает не сертификат, а `TLS alert handshake failure` (alert 40) — SNICallback
+// при отсутствии SNI не вызывается вообще.
+function defaultCertFiles() {
+  return {
+    key: fs.readFileSync(path.join(defaultDir(), 'privkey.pem')),
+    cert: fs.readFileSync(path.join(defaultDir(), 'fullchain.pem')),
+  };
+}
+
 module.exports = {
   ensureDefaultCert,
   issueSelfSigned,
@@ -160,4 +176,5 @@ module.exports = {
   sniCallback,
   certExpiresAt,
   certDir,
+  defaultCertFiles,
 };

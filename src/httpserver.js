@@ -14,7 +14,20 @@ const certs = require('./ssl/certs');
 const acme = require('./ssl/acme');
 const manager = require('./sites/manager');
 
-const proxy = httpProxy.createProxyServer({ xfwd: true });
+// Таймаут обязателен: без него зависший апстрим (приложение сайта приняло
+// соединение и не отвечает) держал сокет и дескрипторы до бесконечности, а клиент
+// не получал ни ответа, ни обрыва (H-06). Используется ИМЕННО `proxyTimeout`:
+// в http-proxy он вешает таймаут на запрос К АПСТРИМУ и при срабатывании
+// абортит его, поэтому ошибка доходит до обработчика ниже и клиент получает
+// внятную страницу 502. Опция `timeout` делает `req.socket.setTimeout()` на
+// сокете КЛИЕНТА: по истечении Node уничтожает соединение, и клиент видит голый
+// ECONNRESET вместо ошибки (проверено пробой на сервере: proxyTimeout → 502 за
+// 3.0 с; timeout → ECONNRESET за 3.0 с; оба → ECONNRESET). От медленных
+// клиентов защищают headersTimeout/requestTimeout самого Node.
+const proxy = httpProxy.createProxyServer({
+  xfwd: true,
+  proxyTimeout: config.proxyTimeoutMs,
+});
 
 proxy.on('error', (err, req, res) => {
   if (!res || res.headersSent) return;
@@ -54,8 +67,36 @@ const MIME = {
   '.map': 'application/json',
 };
 
+// Экранирование подстановок в HTML. Заглушки отдаются БЕЗ авторизации и
+// достижимы из интернета, а в них попадают подконтрольные запросу значения
+// (Host, декодированный путь, имя сайта). Без экранирования это отражённый XSS
+// на домене размещённого сайта (H-01).
+function esc(value) {
+  return String(value === undefined || value === null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Имя хоста из заголовка Host.
+ * Учитывает IPv6-литерал: у `[::1]:8443` прежний `split(':')[0]` давал `'['`,
+ * из-за чего запрос по IPv6 не находил сайт (H-02).
+ */
 function hostOf(req) {
-  return ((req.headers.host || '').split(',')[0] || '').trim().toLowerCase().split(':')[0];
+  const raw = ((req.headers.host || '').split(',')[0] || '').trim().toLowerCase();
+  if (!raw) return '';
+  if (raw.startsWith('[')) {
+    const end = raw.indexOf(']');
+    return end < 0 ? raw : raw.slice(1, end);
+  }
+  const colon = raw.indexOf(':');
+  const host = colon < 0 ? raw : raw.slice(0, colon);
+  // Отвергаем всё, что не похоже на имя хоста или IP: заголовок управляется
+  // клиентом, а его значение уходит в разметку и в Location.
+  return /^[a-z0-9._-]+$/.test(host) ? host : '';
 }
 
 /* ---------- HTTP responses ---------- */
@@ -63,22 +104,47 @@ function hostOf(req) {
 function page(title, body) {
   return `<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${title}</title>
+<title>${esc(title)}</title>
 <style>body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#0f172a;color:#e2e8f0}
 .card{text-align:center;max-width:560px;padding:2rem}h1{font-size:1.5rem;font-weight:600}p{color:#94a3b8;line-height:1.6}
 a{color:#60a5fa}</style></head>
-<body><div class="card"><h1>${title}</h1><p>${body}</p></div></body></html>`;
+<body><div class="card"><h1>${esc(title)}</h1><p>${body}</p></div></body></html>`;
 }
 
-function sendPlaceholder(res, code, title, body) {
+/** Заглушка с экранированным текстом (body — обычный текст, не разметка). */
+function pageText(title, body) {
+  return page(title, esc(body));
+}
+
+function sendPlaceholder(res, code, title, body, extraHeaders) {
   // no-store: заглушки (404/403/503) не должны кэшироваться посредниками —
   // иначе временный сбой «прилипает» и скрывает настоящий контент.
   res.writeHead(code, {
     'Content-Type': 'text/html; charset=utf-8',
     'Cache-Control': 'no-store',
+    // Заглушки — тоже ответ сайта: запрещаем браузеру «угадывать» тип.
+    'X-Content-Type-Options': 'nosniff',
+    ...(extraHeaders || {}),
   });
   res.end(page(title, body));
 }
+
+/** Заглушка со строковым сообщением (значение экранируется). */
+function sendPlaceholderText(res, code, title, text, extraHeaders) {
+  return sendPlaceholder(res, code, title, esc(text), extraHeaders);
+}
+
+/**
+ * Сколько секунд просить клиента подождать во время деплоя.
+ * Обещать «через секунду» нельзя (деплой — это установка зависимостей и сборка),
+ * но и держать клиента за минуту на быстром деплое незачем.
+ */
+function retryAfterSeconds(state) {
+  const since = state && Number(state.since) ? Number(state.since) : Date.now();
+  const elapsed = Math.max(0, Date.now() - since);
+  return Math.max(5, Math.min(60, Math.ceil(elapsed / 1000) + 5));
+}
+
 
 /* ---------- Маршрутизация ---------- */
 
@@ -103,19 +169,26 @@ function serveStatic(site, req, res) {
   }
   if (isBlockedPath(urlPath)) {
     // Отвечаем как «не найдено», чтобы не подтверждать наличие секретных файлов.
-    return sendPlaceholder(res, 404, '404 — не найдено', `Файл не найден: ${urlPath}`);
+    return sendPlaceholderText(res, 404, '404 — не найдено', `Файл не найден: ${urlPath}`);
   }
   let filePath = path.normalize(path.join(root, urlPath));
   if (!filePath.startsWith(root + path.sep) && filePath !== root) {
     return sendPlaceholder(res, 403, '403 — доступ запрещён', 'Путь вне каталога сайта.');
   }
+  // Симлинк внутри каталога может вести наружу (на .env соседа или /etc/passwd):
+  // лексической проверки префикса мало, сверяем РЕАЛЬНЫЙ путь (H-03).
+  const real = realInside(root, filePath);
+  if (!real) {
+    return sendPlaceholder(res, 403, '403 — доступ запрещён', 'Путь вне каталога сайта.');
+  }
+  filePath = real;
   let stat = fs.existsSync(filePath) ? fs.statSync(filePath) : null;
   if (stat && stat.isDirectory()) {
     filePath = path.join(filePath, 'index.html');
     stat = fs.existsSync(filePath) ? fs.statSync(filePath) : null;
   }
   if (!stat) {
-    return sendPlaceholder(res, 404, '404 — не найдено', `Файл не найден: ${urlPath}`);
+    return sendPlaceholderText(res, 404, '404 — не найдено', `Файл не найден: ${urlPath}`);
   }
   const ext = path.extname(filePath).toLowerCase();
   const isAsset = ext !== '.html' && ext !== '.htm';
@@ -123,16 +196,85 @@ function serveStatic(site, req, res) {
     'Content-Type': MIME[ext] || 'application/octet-stream',
     'Content-Length': stat.size,
     'Cache-Control': isAsset ? 'public, max-age=3600' : 'no-cache',
+    'X-Content-Type-Options': 'nosniff',
   });
-  fs.createReadStream(filePath).pipe(res);
+  const rs = fs.createReadStream(filePath);
+  // Без обработчика 'error' исчезновение файла между statSync и чтением (деплой
+  // переименовывает каталог сайта) давало uncaughtException и запрос без ответа.
+  rs.on('error', (err) => {
+    if (res.headersSent) return res.destroy();
+    if (err.code === 'ENOENT') return sendPlaceholder(res, 404, '404 — не найдено', 'Файл не найден.');
+    sendPlaceholder(res, 500, '500 — ошибка', 'Не удалось прочитать файл.');
+  });
+  rs.pipe(res);
+}
+
+/**
+ * Реальный путь внутри каталога, или null.
+ * `fs.realpathSync` разворачивает симлинки; для ещё не существующего файла
+ * разворачиваем ближайший существующий родитель.
+ */
+function realInside(root, target) {
+  let realRoot;
+  try {
+    realRoot = fs.realpathSync(root);
+  } catch {
+    return null;
+  }
+  let probe = target;
+  let real;
+  while (true) {
+    try {
+      real = fs.realpathSync(probe);
+      break;
+    } catch (err) {
+      if (err.code !== 'ENOENT') return null;
+      const parent = path.dirname(probe);
+      if (parent === probe) return null;
+      probe = parent;
+    }
+  }
+  if (real !== realRoot && !real.startsWith(realRoot + path.sep)) return null;
+  return target;
 }
 
 function proxyToNode(site, req, res) {
   res.setHeader('X-Sitepanel-Site', site.id);
-  proxy.web(req, res, { target: `http://127.0.0.1:${site.port}` });
+  const port = Number(site.port);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    // Порт не выделен/потерян (битый db.json): прокси на `null` не отдаёт ни
+    // ошибки, ни ответа, и запрос висит вечно (P-14).
+    return sendPlaceholder(res, 503, '503 — сайт недоступен', 'Внутренний порт сайта не задан. Переразверните сайт.');
+  }
+  proxy.web(req, res, { target: `http://127.0.0.1:${port}` }, (err) => {
+    // Страховка на случай, если ошибка не дошла до общего обработчика.
+    if (!err || !res || res.headersSent) return;
+    res.writeHead(502, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(page('502 — приложение не отвечает', 'Сайт запущен, но приложение не отвечает на внутреннем порту.'));
+  });
 }
 
 function handleRequest(req, res, isHttps) {
+  try {
+    return route(req, res, isHttps);
+  } catch (err) {
+    // Сырой http-листенер: исключение здесь раньше оставляло клиента без ответа
+    // и подвешивало сокет навсегда (SP-07).
+    console.error('[httpserver] ошибка обработки запроса:', err && err.stack ? err.stack : err);
+    if (!res.headersSent) {
+      try {
+        sendPlaceholder(res, 500, '500 — ошибка панели', 'Внутренняя ошибка при обработке запроса.');
+      } catch {
+        /* сокет уже закрыт */
+      }
+    } else {
+      try { res.destroy(); } catch { /* уже закрыт */ }
+    }
+    return undefined;
+  }
+}
+
+function route(req, res, isHttps) {
   const host = hostOf(req);
   const url = req.url || '/';
 
@@ -158,21 +300,34 @@ function handleRequest(req, res, isHttps) {
 
   if (!site) {
     return sendPlaceholder(res, 404, 'Домен не настроен',
-      `Панель SitePanel работает, но домен <b>${host || '?'}</b> не привязан ни к одному сайту.<br>Настройте привязку в админ-панели.`);
+      `Панель SitePanel работает, но домен <b>${esc(host || '?')}</b> не привязан ни к одному сайту.<br>Настройте привязку в админ-панели.`);
   }
 
   if (site.status !== 'running') {
-    return sendPlaceholder(res, 503, 'Сайт отключён',
+    // Деплой на время останавливает сайт. Раньше клиент получал 503 без единой
+    // подсказки, что это временно и когда повторить: для посетителя «идёт
+    // обновление» и «сайт выключен» выглядели одинаково (P-31).
+    const dep = manager.deployState(site);
+    if (dep) {
+      const retry = retryAfterSeconds(dep);
+      return sendPlaceholderText(res, 503, 'Сайт обновляется',
+        `Сайт «${site.name}» сейчас обновляется (${dep.what}). Повторите запрос через ${retry} с.`,
+        { 'Retry-After': String(retry) });
+    }
+    return sendPlaceholderText(res, 503, 'Сайт отключён',
       `Сайт «${site.name}» сейчас остановлен (статус: ${site.status}).`);
   }
 
   // Перенаправление на HTTPS только если запрос реально пришёл по http
   // напрямую в панель (не через TLS-терминирующий прокси).
   if (!effectiveHttps && site.ssl && site.ssl.status === 'active') {
-    // Host может содержать нестандартный порт HTTP — для HTTPS подставляем свой.
-    const hostName = (req.headers.host || host).split(':')[0] || host;
+    // Домен берём ИЗ РЕЕСТРА, а не из заголовка Host: иначе открытый редирект
+    // на произвольный хост с валидным сертификатом панели (фишинг) — H-02.
+    const target = (Array.isArray(site.domains) && site.domains.find((d) => !d.startsWith('*.'))) || host;
+    if (!target) return sendPlaceholder(res, 400, '400 — неверный запрос', 'Не удалось определить домен для перенаправления.');
+    const safeUrl = /^\/[^\s]*$/.test(url) ? url : '/';
     const portPart = config.httpsPort === 443 ? '' : ':' + config.httpsPort;
-    res.writeHead(301, { Location: 'https://' + hostName + portPart + url });
+    res.writeHead(301, { Location: 'https://' + target + portPart + safeUrl });
     return res.end();
   }
 
@@ -185,16 +340,22 @@ function handleRequest(req, res, isHttps) {
 function createServers() {
   const httpServer = http.createServer((req, res) => handleRequest(req, res, false));
 
+  // key/cert обязательны и помимо SNICallback: если клиент не прислал SNI
+  // (обращение по IP, старый клиент, проверка из мониторинга), SNICallback не
+  // вызывается вовсе, и без явного сертификата сервер обрывает рукопожатие
+  // `TLS alert handshake failure` (alert 40) вместо того, чтобы показать
+  // сертификат по умолчанию. Для сайтов со своим сертификатом работает SNICallback.
   const httpsServer = https.createServer(
-    { SNICallback: certs.sniCallback },
+    { SNICallback: certs.sniCallback, ...certs.defaultCertFiles() },
     (req, res) => handleRequest(req, res, true)
   );
 
   // Websockets -> в node-приложения.
   const routeUpgrade = (req, socket, head) => {
     const site = store.getSiteByDomain(hostOf(req));
-    if (site && site.type === 'node' && site.status === 'running') {
-      proxy.ws(req, socket, head, { target: `http://127.0.0.1:${site.port}` });
+    const port = site ? Number(site.port) : NaN;
+    if (site && site.type === 'node' && site.status === 'running' && Number.isInteger(port) && port > 0) {
+      proxy.ws(req, socket, head, { target: `http://127.0.0.1:${port}` });
     } else {
       socket.destroy();
     }
@@ -208,9 +369,22 @@ function createServers() {
 function listenServers({ httpServer, httpsServer }) {
   return new Promise((resolve, reject) => {
     let pending = 2;
+    let settled = false;
     const done = (err) => {
-      if (err) return reject(err);
-      if (--pending === 0) resolve();
+      if (settled) return;
+      if (err) {
+        settled = true;
+        // Понятный текст вместо сырого стека: чаще всего порт занят прежним
+        // экземпляром панели или nginx (SP-08).
+        if (err && err.code === 'EADDRINUSE') {
+          err.panelMessage = `Порт ${err.port || ''} уже занят другим процессом — остановите прежний экземпляр панели (systemctl status sitepanel) или задайте другой порт.`;
+        }
+        return reject(err);
+      }
+      if (--pending === 0) {
+        settled = true;
+        resolve();
+      }
     };
     httpServer.once('error', done);
     httpsServer.once('error', done);
@@ -265,5 +439,5 @@ function securityHeaders(req, res, next) {
   next();
 }
 
-module.exports = { createServers, listenServers, securityHeaders, isBlockedPath, hostOf };
+module.exports = { createServers, listenServers, securityHeaders, isBlockedPath, hostOf, esc, page };
 

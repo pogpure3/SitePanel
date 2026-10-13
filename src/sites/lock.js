@@ -29,7 +29,15 @@ function withSiteLock(siteId, fn) {
     () => held.run(id, fn)
   );
   // Хвост очереди не должен «залипать» на ошибке предыдущей операции.
-  chains.set(id, run.then(() => {}, () => {}));
+  const tail = run.then(() => {}, () => {});
+  chains.set(id, tail);
+  // И не должен оставаться в Map навсегда: раньше запись жила до удаления сайта,
+  // то есть по одному удержанному промису на каждый сайт за всё время работы.
+  // Удаляем только если за время операции не появился новый хвост.
+  const release = () => {
+    if (chains.get(id) === tail) chains.delete(id);
+  };
+  tail.then(release, release);
   return run;
 }
 

@@ -260,7 +260,8 @@ router.patch('/sites/:id', wrap(async (req, res) => {
   const site = findSite(req);
   if (req.body.name) site.name = slugify(req.body.name);
   if (req.body.autoStart !== undefined) site.autoStart = !!req.body.autoStart;
-  store.save();
+  // flush(), а не save(): ошибка записи должна вернуть 5xx, а не «ок» через 250 мс.
+  store.flush();
   res.json(await serializeSite(site));
 }));
 
@@ -280,7 +281,15 @@ router.post('/sites/:id/domains', wrap(async (req, res) => {
 
 router.delete('/sites/:id/domains/:domain', wrap(async (req, res) => {
   const site = findSite(req);
-  const domain = decodeURIComponent(req.params.domain).toLowerCase();
+  let raw;
+  try {
+    raw = decodeURIComponent(req.params.domain);
+  } catch {
+    // '%' в сегменте бросал URIError и отдавал 500 (T-18).
+    return res.status(400).json({ error: 'Некорректное имя домена в пути' });
+  }
+  const domain = store.normalizeDomain(raw);
+  if (!domain) return res.status(400).json({ error: 'Некорректное доменное имя' });
   site.domains = site.domains.filter((d) => d !== domain);
   store.flush();
   res.json({ ok: true, domains: site.domains });
@@ -377,11 +386,24 @@ router.post('/alerts/test', wrap(async (_req, res) => {
 
 router.post('/password', wrap(async (req, res) => {
   const { user, password } = req.body;
-  if (!password || String(password).length < 8) {
+  // Валидация типа обязательна: с объектом в поле user панель записывала
+  // `"user": {...}` в auth.json и вход ломался навсегда (H-12).
+  if (user !== undefined && user !== null && user !== '' && typeof user !== 'string') {
+    return res.status(400).json({ error: 'Логин должен быть строкой' });
+  }
+  if (typeof password !== 'string') {
+    return res.status(400).json({ error: 'Пароль должен быть строкой' });
+  }
+  if (password.length < 8) {
     return res.status(400).json({ error: 'Пароль должен быть не короче 8 символов' });
   }
-  auth.changePassword(user, password);
-  res.json({ ok: true });
+  try {
+    const result = auth.changePassword(user, password);
+    res.json({ ok: true, user: result.user });
+  } catch (err) {
+    const status = err.code === 'INVALID_USER' || err.code === 'INVALID_PASSWORD' ? 400 : 500;
+    res.status(status).json({ error: err.message });
+  }
 }));
 
 router.get('/dashboard', wrap(async (_req, res) => {
@@ -478,6 +500,10 @@ router.get('/sites/:id/file', wrap(async (req, res) => {
   res.json({ path: rel.split(path.sep).join('/'), size: st.size, binary, content: binary ? null : buf.toString('utf8') });
 }));
 
+// Файловый менеджер пишет в ТОТ ЖЕ каталог, который подменяет деплой: без общей
+// блокировки запись в середине `renameSync(dir, dir.backup)` попадала в каталог,
+// которого уже нет, либо в старую версию, которая через миг переставала быть
+// сайтом (P-31). Все операции с файлами выполняются под локом сайта.
 router.put('/sites/:id/file', wrap(async (req, res) => {
   const site = findSite(req);
   const { target, rel } = safePath(site, req.body.path);
@@ -486,14 +512,14 @@ router.put('/sites/:id/file', wrap(async (req, res) => {
   if (Buffer.byteLength(content, 'utf8') > EDIT_MAX_BYTES) {
     return res.status(413).json({ error: 'Файл больше 2 МБ' });
   }
-  await fs.promises.writeFile(target, content, 'utf8');
+  await manager.withSiteLock(site.id, () => fs.promises.writeFile(target, content, 'utf8'));
   res.json({ ok: true });
 }));
 
 router.post('/sites/:id/files/mkdir', wrap(async (req, res) => {
   const site = findSite(req);
   const { target } = safePath(site, req.body.path);
-  await fs.promises.mkdir(target);
+  await manager.withSiteLock(site.id, () => fs.promises.mkdir(target));
   res.json({ ok: true });
 }));
 
@@ -503,7 +529,7 @@ router.post('/sites/:id/files/rename', wrap(async (req, res) => {
   if (!from.rel) return res.status(400).json({ error: 'Нельзя переименовать корень' });
   const name = sanitizeName(req.body.to);
   const to = path.join(from.root, path.dirname(from.rel), name);
-  await fs.promises.rename(from.target, to);
+  await manager.withSiteLock(site.id, () => fs.promises.rename(from.target, to));
   res.json({ ok: true });
 }));
 
@@ -511,7 +537,7 @@ router.delete('/sites/:id/file', wrap(async (req, res) => {
   const site = findSite(req);
   const { target, rel } = safePath(site, req.query.path, { mustExist: true });
   if (!rel) return res.status(400).json({ error: 'Нельзя удалить корень сайта' });
-  await fs.promises.rm(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+  await manager.withSiteLock(site.id, () => fs.promises.rm(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }));
   res.json({ ok: true });
 }));
 
@@ -521,21 +547,35 @@ router.post('/sites/:id/files/upload', uploadAny.single('file'), wrap(async (req
   if (!req.file) return res.status(400).json({ error: 'Файл не получен' });
   const name = sanitizeName(req.body.name || req.file.originalname);
   const dest = path.join(dir.target, name);
-  await fs.promises.rename(req.file.path, dest).catch(async (err) => {
-    // Между дисками rename может упасть — копируем.
-    if (err.code === 'EXDEV') {
-      await fs.promises.copyFile(req.file.path, dest);
-      await fs.promises.rm(req.file.path, { force: true });
-      return;
-    }
-    throw err;
-  });
   let extracted = false;
-  if (req.body.extract === '1' && /\.zip$/i.test(name)) {
-    await manager.extractZip(dest, dir.target);
-    await fs.promises.rm(dest, { force: true });
-    extracted = true;
+  // Распаковка заменяет дерево сайта и уничтожает сам архив, поэтому требует
+  // ЯВНОГО подтверждения: одного `extract=1` мало — распаковка не должна
+  // запускаться случайным/повторным запросом (P-31). Оболочка подтверждает
+  // распаковку диалогом и посылает confirm=1.
+  if (req.body.extract === '1' && req.body.confirm !== '1') {
+    await fs.promises.rm(req.file.path, { force: true });
+    return res.status(400).json({
+      error: 'Для распаковки архива нужно явное подтверждение (confirm=1): содержимое каталога будет заменено, а архив удалён',
+    });
   }
+  // Распаковка архива пишет в тот же каталог, что и деплой: держим лок на обе
+  // операции целиком, а не только на перемещение файла (P-07).
+  await manager.withSiteLock(site.id, async () => {
+    await fs.promises.rename(req.file.path, dest).catch(async (err) => {
+      // Между дисками rename может упасть — копируем.
+      if (err.code === 'EXDEV') {
+        await fs.promises.copyFile(req.file.path, dest);
+        await fs.promises.rm(req.file.path, { force: true });
+        return;
+      }
+      throw err;
+    });
+    if (req.body.extract === '1' && /\.zip$/i.test(name)) {
+      await manager.extractZip(dest, dir.target);
+      await fs.promises.rm(dest, { force: true });
+      extracted = true;
+    }
+  });
   res.json({ ok: true, extracted });
 }));
 

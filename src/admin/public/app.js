@@ -821,6 +821,8 @@ async function renderFiles() {
     fd.append('path', view.path || '');
     if (/\.zip$/i.test(file.name) && await confirmDialog('Распаковать архив?', `Файлы из «${file.name}» будут распакованы в текущий каталог, сам архив удалён.`)) {
       fd.append('extract', '1');
+      // Явное подтверждение распаковки: сервер отвергает extract без него (P-31).
+      fd.append('confirm', '1');
     }
     try {
       const r = await apiUpload(`/api/sites/${siteId}/files/upload`, fd);

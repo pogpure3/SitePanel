@@ -11,6 +11,8 @@
 // поэтому ошибки игнорируем — на POSIX режим применяется.
 
 const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 
 /** Режимы, которые имеет смысл использовать. */
 const MODE = {
@@ -19,19 +21,89 @@ const MODE = {
 };
 
 /**
- * Записать файл, ограничив права владельцем.
+ * Записать файл атомарно: временный файл рядом → fsync → rename → fsync каталога.
+ *
+ * Зачем не `fs.writeFileSync` напрямую: запись «в тот же файл» при потере питания
+ * или падении процесса оставляет обрезанный файл (на ext4 — часто нулевой длины).
+ * Для `db.json` это означает потерю реестра сайтов, для `privkey.pem` — нерабочий
+ * TLS. fsync данных и каталога закрывает окно, в котором rename уже виден, а
+ * содержимое ещё в кэше (SP-02).
+ *
+ * Имя временного файла уникально (pid + случайный суффикс), поэтому два процесса
+ * панели не перемешивают буферы друг друга (часть SP-08).
+ *
  * @param {string} file путь
  * @param {string|Buffer} data содержимое
  * @param {number} [mode] режим (по умолчанию 0600)
+ * @returns {string} путь записанного файла
  */
-function writePrivate(file, data, mode = MODE.PRIVATE) {
-  fs.writeFileSync(file, data, { mode });
-  // Если файл уже существовал, writeFileSync не меняет его режим — доводим явно.
+function writePrivateAtomic(file, data, mode = MODE.PRIVATE) {
+  const dir = path.dirname(file);
+  const tmp = path.join(
+    dir,
+    '.' + path.basename(file) + '.' + process.pid + '.' + crypto.randomBytes(4).toString('hex') + '.tmp'
+  );
+
+  let fd;
+  try {
+    fd = fs.openSync(tmp, 'w', mode);
+  } catch (err) {
+    // Каталога нет — создаём и пробуем ещё раз (вызывающие обычно делают это сами).
+    if (err.code === 'ENOENT') {
+      mkdirPrivate(dir);
+      fd = fs.openSync(tmp, 'w', mode);
+    } else {
+      throw err;
+    }
+  }
+  try {
+    fs.writeFileSync(fd, data);
+    try {
+      fs.fchmodSync(fd, mode);
+    } catch {
+      /* Windows: права задаются ACL, а не mode */
+    }
+    fs.fsyncSync(fd);
+  } catch (err) {
+    try { fs.closeSync(fd); } catch { /* уже закрыт */ }
+    try { fs.unlinkSync(tmp); } catch { /* нет файла */ }
+    throw err;
+  }
+  fs.closeSync(fd);
+
+  try {
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* нет файла */ }
+    throw err;
+  }
+
+  // Сбрасываем на диск и саму запись каталога: иначе после выключения питания
+  // файла может не оказаться, хотя rename уже вернулся успешно.
+  try {
+    const dfd = fs.openSync(dir, 'r');
+    try { fs.fsyncSync(dfd); } finally { fs.closeSync(dfd); }
+  } catch {
+    /* Windows и некоторые ФС не дают открыть каталог — не критично */
+  }
+
+  // Если файл уже существовал, режим мог остаться прежним — доводим явно.
   try {
     fs.chmodSync(file, mode);
   } catch {
     /* Windows: права задаются ACL, а не mode */
   }
+  return file;
+}
+
+/**
+ * Записать файл, ограничив права владельцем (атомарно, см. writePrivateAtomic).
+ * @param {string} file путь
+ * @param {string|Buffer} data содержимое
+ * @param {number} [mode] режим (по умолчанию 0600)
+ */
+function writePrivate(file, data, mode = MODE.PRIVATE) {
+  return writePrivateAtomic(file, data, mode);
 }
 
 /** Создать каталог только для владельца. */
@@ -67,10 +139,22 @@ function hardenDataDir(config) {
   const fsMod = fs;
   let fixed = 0;
 
+  // Сам каталог данных тоже ужимаем: в нём лежат db.json с git-токенами и auth.json.
+  // Раньше он оставался 0755 и просматривался любым пользователем машины (H-16).
+  try {
+    if ((fsMod.statSync(config.dataDir).mode & 0o777) !== MODE.PRIVATE_DIR) {
+      fsMod.chmodSync(config.dataDir, MODE.PRIVATE_DIR);
+      fixed++;
+    }
+  } catch { /* каталога нет — ensureDirs создаст его с нужным режимом */ }
+
   const tightenIfNeeded = (file, mode) => {
     try {
       const st = fsMod.statSync(file);
-      if ((st.mode & 0o777) > mode) {
+      // Сравниваем ИМЕННО биты прав, а не величину: режимы 0444/0440/0400
+      // численно МЕНЬШЕ 0600, но по-прежнему читаемы группой и остальными.
+      // Раньше условие `(mode & 0o777) > mode` такие файлы пропускало (H-16).
+      if ((st.mode & 0o777) !== mode) {
         fsMod.chmodSync(file, mode);
         fixed++;
       }
@@ -88,11 +172,14 @@ function hardenDataDir(config) {
       return;
     }
     for (const e of entries) {
-      const full = require('path').join(dir, e.name);
+      const full = path.join(dir, e.name);
       if (e.isDirectory()) {
         // Каталог с ключами сайта — только для владельца.
         try {
-          if ((fsMod.statSync(full).mode & 0o777) > MODE.PRIVATE_DIR) fsMod.chmodSync(full, MODE.PRIVATE_DIR);
+          if ((fsMod.statSync(full).mode & 0o777) !== MODE.PRIVATE_DIR) {
+            fsMod.chmodSync(full, MODE.PRIVATE_DIR);
+            fixed++;
+          }
         } catch { /* не критично */ }
         walk(full, depth + 1);
       } else if (
@@ -114,4 +201,4 @@ function hardenDataDir(config) {
   return fixed;
 }
 
-module.exports = { writePrivate, mkdirPrivate, tighten, hardenDataDir, MODE };
+module.exports = { writePrivate, writePrivateAtomic, mkdirPrivate, tighten, hardenDataDir, MODE };
