@@ -54,6 +54,13 @@ test('origin: same-origin проходит, чужой и битый — нет'
 
 test('shellSpec: fallback-цепочка соответствует окружению', () => {
   const spec = terminal._shellSpec(120, 40);
+  // node-pty — optional-зависимость: где собрался, там и полный PTY.
+  let ptyLoaded = false;
+  try { require('node-pty'); ptyLoaded = true; } catch { /* нет сборки */ }
+  if (ptyLoaded) {
+    assert.equal(spec.kind, 'pty');
+    return;
+  }
   if (process.platform === 'win32') {
     // Windows (локальная разработка): сырой shell без PTY.
     assert.equal(spec.kind, 'raw');
