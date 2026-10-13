@@ -8,6 +8,39 @@
 
 ---
 
+## 2026-10-13 — panel_test: вычищен вхост rm; бэкапы вычищенного удалены
+
+**Запрос.** «www.p.evil-mesh.ru можно игнорировать, бекапы того что вычищено из
+тестовой панели не нужны. rm вычистить».
+
+**Изменения — panel_test.**
+
+- nginx: удалён вхост `rm` (`sites-available/rm` + симлинк; тело — заглушка
+  из WORKLOG 2026-10-12: 80 → 404, 443 → `ssl_reject_handshake`). Провала в
+  чужой сертификат нет: `000-ssl-reject` остаётся `443 default_server` с
+  `ssl_reject_handshake`.
+- Бэкапы вычищенного удалены из `/root` (решение пользователя):
+  `cleanup-p-m-restored-20261013-1808{34,927}.tar.gz` (p и mesh-monitor),
+  `rm-cleanup-full-20261012-072339.tar.gz`, `rm-cleanup-bak-20261012-072153.tar.gz`,
+  `rm.nginx.bak.20261012-065609`, маркеры `.rm-cleanup-*last`.
+  Оставлены не относящиеся к вычистке: `sitepanel-code-backup-*` (откаты кода),
+  `sitepanel-backups/` (cron 7.3), `auth.json.bak`, `certs-default-old.bak`,
+  `deploy/nginx-backup-*`, `pqr-panel-userdata-backup`, `stage2-deploy.tar.gz`.
+- Итоговые вхосты panel_test: `000-ssl-reject`, `default`, `pqr-panel`,
+  `sitepanel-acme`, `sitepanel-admin`.
+
+**Проверка.**
+
+- `nginx -t` успешен, reload применён.
+- `rm.evil-mesh.ru` — **DNS-записи больше нет** (ENOTFOUND с рабочей машины);
+  напрямую на `46.29.164.250:443` с SNI `rm.evil-mesh.ru` — TLS-отказ
+  (`UNRECOGNIZED_NAME`).
+- Не задеты: `pqr` → 200, `p` → 200, `pg` → 200, `m` → 401, админка теста → 401.
+
+**Осталось.** — (чистка завершена; из несогласованного остаются только 7.1 и этап 5).
+
+---
+
 ## 2026-10-13 — Домен p.evil-mesh.ru → сайт pg (panel_beget); вычистка panel_test
 
 **Запрос.** «Перенеси домен p.evil-mesh.ru на сайт pg прод, удали сайт с тестового
