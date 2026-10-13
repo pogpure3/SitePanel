@@ -109,7 +109,6 @@ code {
 .btn-danger:hover { background: #991b1b; }
 .btn-ghost { background: transparent; }
 .btn-sm { padding: 4px 10px; font-size: 12px; }
-.btn-icon { padding: 5px 9px; }
 
 /* Видимый фокус для клавиатуры: смена border-color одна не читается.
    :focus-visible не мешает мыши, но обязателен для навигации с Tab. */
@@ -238,7 +237,7 @@ main {
   letter-spacing: .06em;
   color: var(--text-dim);
 }
-.panel .span2 { grid-column: 1 / -1; }
+.panel.span2 { grid-column: 1 / -1; }
 
 .kv { display: grid; grid-template-columns: 150px 1fr; gap: 6px 12px; font-size: 13px; }
 .kv dt { color: var(--text-dim); }
@@ -260,6 +259,7 @@ input[type="text"], input[type="password"], input[type="email"], select, textare
   font-family: inherit;
 }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--primary); }
+::placeholder { color: #94a3b8; opacity: 1; }
 
 .domain-list { display: flex; flex-direction: column; gap: 6px; }
 .domain-row {
@@ -275,6 +275,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 .domain-row .remove {
   background: none; border: none; color: var(--text-dim); cursor: pointer;
   font-size: 15px; padding: 2px 6px; border-radius: 6px;
+  min-width: 24px; min-height: 24px; line-height: 1;
 }
 .domain-row .remove:hover { color: var(--red); background: var(--bg-hover); }
 .domain-hint { color: var(--text-dim); font-size: 12px; margin-top: 10px; line-height: 1.6; }
@@ -296,7 +297,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 }
 
 .health-strip { display: flex; gap: 3px; margin-top: 8px; flex-wrap: wrap; }
-.health-cell { width: 10px; height: 18px; border-radius: 3px; background: #334155; }
+.health-cell { display: inline-block; width: 10px; height: 18px; border-radius: 3px; background: #334155; }
 .health-cell.ok { background: var(--green); }
 .health-cell.fail { background: var(--red); }
 
@@ -368,6 +369,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 .fm-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .fm-table tbody tr:hover td { background: var(--bg-hover); }
 .fm-name { cursor: pointer; word-break: break-all; }
+.fm-actions button, .fm-actions a { min-width: 26px; min-height: 26px; }
 .fm-actions { white-space: nowrap; text-align: right; }
 .fm-actions button, .fm-actions a {
   background: none; border: none; color: var(--text-dim); cursor: pointer;
@@ -447,3 +449,33 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 .toast.error { border-left-color: var(--red); }
 .toast.success { border-left-color: var(--green); }
 @keyframes slidein { from { transform: translateX(30px); opacity: 0; } }
+
+/* Баннер состояния связи: сессия истекла / нет связи (U-01). */
+.conn-banner {
+  margin: 10px auto 0;
+  max-width: 1100px;
+  padding: 10px 16px;
+  border: 1px solid #b45309;
+  border-radius: 8px;
+  background: #451a03;
+  color: #fde68a;
+  font-size: 13px;
+}
+.conn-banner.sticky { border-color: #991b1b; background: #450a0a; color: #fecaca; }
+.conn-banner.hidden { display: none; }
+
+/* Глобальный прогресс multipart-загрузок (U-11). */
+.global-progress {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 4px;
+  background: rgba(148, 163, 184, 0.15);
+  z-index: 200;
+}
+.global-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--primary);
+  transition: width .2s ease;
+}
+.global-progress.hidden { display: none; }

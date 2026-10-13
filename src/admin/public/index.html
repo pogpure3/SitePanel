@@ -23,6 +23,11 @@
 
   <main id="app"></main>
 
+  <!-- Состояние связи с панелью: ошибки API, истёкшая сессия (U-01) -->
+  <div id="connBanner" class="conn-banner hidden" role="alert"></div>
+  <!-- Глобальный прогресс multipart-загрузок (U-11) -->
+  <div id="globalProgress" class="global-progress hidden"><div class="global-progress-bar"></div></div>
+
   <!-- Модальное окно: добавление сайта -->
   <div class="modal-backdrop hidden" id="addModal">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="addTitle">

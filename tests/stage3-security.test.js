@@ -209,7 +209,7 @@ test('H-14: учётка панели не доходит до сайта, чу�
   const m = /Пароль:\s+(\S+)/.exec(panel.bootLog());
   assert.ok(m, 'сгенерированный пароль не найден в логе панели');
   const panelPassword = m[1];
-  const site = await uploadEchoSite(t, panel, tmp, 'echo3.local');
+  await uploadEchoSite(t, panel, tmp, 'echo3.local');
 
   const b64 = (s) => Buffer.from(s).toString('base64');
 

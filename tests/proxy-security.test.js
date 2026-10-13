@@ -17,7 +17,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { startPanel, api, fetchWithHost, makeZip, sleep, ROOT } = require('./helpers/panel');
+const { startPanel, api, fetchWithHost, makeZip, sleep } = require('./helpers/panel');
 
 /* ---------- Чистые функции ---------- */
 

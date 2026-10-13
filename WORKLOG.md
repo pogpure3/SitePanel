@@ -8,6 +8,98 @@
 
 ---
 
+## 2026-10-13 — Этапы 6–7 плана: качество кода и процессы; обслуживание стендов
+
+**Запрос.** «Давай дальше 6–7» — выполнить этап 6 ([PLAN.md](PLAN.md):1897-1914)
+и этап 7 ([PLAN.md](PLAN.md):1916-1924). Этап 5 (изоляция прав) пропущен по
+плану: требует согласия и окна обслуживания.
+
+**Диагностика.** Решения по ходу:
+
+- *P-04.* Полное blue/green (переключение портов) не делалось — реализована
+  посильная половина с большей частью пользы: клонирование/распаковка/сборка
+  переехали ДО `deployBegin` и `_stop`. Сценарии найдены тестом: (а) первая
+  редакция доверяла только `PANEL_TRUST_PROXY`-списку, но оставляла loopback —
+  исправлено на «список заменяет умолчание»; (б) тест P-04 собирал сайт с
+  `package.json` на несуществующий `x.js` — сайт был `crashed` ещё до деплоя,
+  тест проверял не то. Битый zip проверен отдельной пробой: 500, сайт `running`,
+  старая версия отвечает — ожидаемое поведение нового потока.
+- *P-09* — уже был реализован в `detectType` (прямой `node <путь>` при простом
+  скрипте `start`); подтверждено чтением, в CHANGELOG отмечено как проверенное.
+- *selfsigned 5.x* — `generate()` асинхронный; `ensureDefaultCert`/`issueSelfSigned`
+  стали async, оба вызывающих (index.js, маршрут selfsigned) ждут. API 5.5.0
+  проверен пробой (`pems.private/cert`).
+- *UI-тесты в песочнице* — `tests/ui-badge.test.js` эвалирует `app.js` в
+  `vm`-песочнице; новые top-level `window.addEventListener('hashchange')` и
+  чтение `location.hash` на старте требовали дополнить песочницу (`window`,
+  `location.hash`).
+- *Playwright* — установлен локально (chromium), браузерный тест прогнан
+  реально; файл скипается без библиотеки, чтобы набор оставался зелёным.
+- *CHANGELOG* — при склейке секций `[Unreleased]` (этапы 3–4 + 6–7) первая
+  редакция правок потеряла заголовки релизов; файл восстановлен из git
+  (`git show HEAD:CHANGELOG.md`) и блок пересобран заново. Итог проверен:
+  один набор секций, все три релиза на месте.
+
+**Изменения.** Рабочая копия `D:\Projects\SitePanel`; на стенды не выкладывалось.
+
+- *6.3 UI* — `src/admin/public/app.js` (таймаут `api()` 5 мин, баннер связи и
+  бэкофф вместо `location.reload()`, hash-роутинг с `navigate()`, пауза опроса
+  в скрытой вкладке, домены с отвязкой, переименование/автозапуск, auto-disable
+  кнопок, `inert`+busy на модалках, удалён `isTextFile`); `style.css`
+  (`.panel.span2`, `display:inline-block` у `.health-cell`, цели ≥24px,
+  `::placeholder #94a3b8`, `.conn-banner`, `.global-progress`, удалён
+  `.btn-icon`); `index.html` (баннер, глобальный прогресс).
+- *6.4* — `src/store.js`: `STATE_VERSION=1`, `migrate()`, нормализация порогов
+  алертов.
+- *6.5* — `src/alerts.js` (один snapshot на проверку); `src/index.js` (почасовой
+  `cleanTemp` с `unref`). SP-10/SP-25 проверены по коду — закрыты ранее.
+- *6.6* — `src/sites/manager.js`: `_deploy` и `_deployFromGit` собирают staging
+  до `deployBegin`/`_stop`; `finalizeDeploy` принял `installWarning`.
+- *6.7* — проверен существующий `detectType` (без изменений кода).
+- *6.9* — `package.json`/`package-lock.json` (`selfsigned ^5.5.0`), `src/ssl/certs.js`
+  (async), `src/index.js:49` (`await`), `src/admin/routes.js` (`await`).
+- *6.1/6.8* — `.github/workflows/ci.yml` (Node 20/22/24: `node --check`, eslint,
+  `node tests/run.js`), `eslint.config.js`, devDeps `eslint/@eslint/js/globals`,
+  `npm run lint`; правки по линтеру в 12 файлах (неиспользуемые переменные,
+  устаревшие eslint-disable, песочница ui-badge).
+- *6.2* — `tests/ui-browser.test.js` (Playwright: дашборд, hash-роутинг U-12,
+  домены U-08, health-полоска U-02, модалка U-04, парольное поле токена A-02,
+  таймер логов U-09/T-39, чистая консоль).
+- *6.10* — `tests/stage6-quality.test.js`: T-02 (chmod 0500 на data/ → 5xx →
+  восстановление), SP-15, P-04, 7.4.
+- *7.3/7.1/7.2* — `scripts/backup-sitepanel.sh` (cron-бэкапы с ротацией),
+  `scripts/harden-old-stand.sh` (НЕ применялся), `scripts/probe-external-db.sh`.
+- *7.4* — `src/index.js`: `GET /healthz` до auth-мидлвари.
+- `README.md` — тесты/lint/Playwright/CI, раздел «Обслуживание стенда».
+
+**Проверка.**
+
+- `node --check` всех `src/**/*.js`, `tests/**/*.js`; `npx eslint src tests` —
+  0 проблем.
+- `tests/stage6-quality.test.js`: pass 3 + skip 1 (POSIX). `tests/ui-browser.test.js`:
+  pass 1 (реальный Chromium). `tests/ui-badge.test.js`: 5/5 после дополнения
+  песочницы.
+- Полный набор `node tests/run.js` (Windows): **185 тестов, pass 169, fail 3,
+  skipped 13** — падают только платформозависимые T-32/T-43/T-44 (идентично
+  чистому `v1.0.2`).
+- CI прогнать негде (нет push из сессии) — workflow сработает при следующем
+  `git push`; шаги те же, что выполнены локально.
+
+**Осталось.**
+
+- **7.1 НЕ применён** (требует явного согласия по AGENTS.md): ранбук
+  `scripts/harden-old-stand.sh` готов; применять только с открытой второй
+  ssh-сессией и консолью провайдера под рукой.
+- **7.2** — внешняя зависимость: прогнать `scripts/probe-external-db.sh` на обоих
+  стендах и передать вывод владельцу БД (белый список/файрвол).
+- Автоматизация бэкапов (7.3) требует установки скрипта в cron на стендах —
+  при следующей выкладке.
+- Blue/green в полном смысле (переключение порта без остановки) не сделано —
+  см. P-04 в CHANGELOG.
+- Выкладка этапов 3–7 на стенды — одной порцией, после прогона на Linux.
+
+---
+
 ## 2026-10-13 — Этап 4 плана: наблюдаемость и эксплуатация
 
 **Запрос.** «Приступай к следующему» — выполнить этап 4 [PLAN.md](PLAN.md):1874-1888

@@ -34,7 +34,7 @@ function resetState() {
   store.state.settings.alerts = { enabled: true, telegramToken: '', telegramChatId: '', diskThreshold: 80, memThreshold: 80 };
 }
 
-test('SP-01: битый db.json не превращается в пустой реестр молча', (t) => {
+test('SP-01: битый db.json не превращается в пустой реестр молча', () => {
   resetState();
   // Есть предыдущее поколение — панель обязана взять его, а не пустоту.
   writeDb({ sites: [{ id: 'a1', name: 'one', type: 'static', domains: ['one.example.com'] }] });
@@ -70,7 +70,7 @@ test('SP-01: битый db.json не превращается в пустой р
   );
 });
 
-test('SP-01: без .bak панель не пишет пустой реестр', (t) => {
+test('SP-01: без .bak панель не пишет пустой реестр', () => {
   resetState();
   for (const f of ['db.json', 'db.json.bak']) {
     try { fs.unlinkSync(path.join(DATA_DIR, f)); } catch { /* нет файла */ }
@@ -83,7 +83,7 @@ test('SP-01: без .bak панель не пишет пустой реестр'
   assert.equal(fs.existsSync(config.dbFile), false, 'битый файл отложен, новый не создан');
 });
 
-test('SP-07: запись без domains не роняет поиск по домену', (t) => {
+test('SP-07: запись без domains не роняет поиск по домену', () => {
   try { fs.unlinkSync(path.join(DATA_DIR, 'db.json')); } catch { /* нет файла */ }
   try { fs.unlinkSync(path.join(DATA_DIR, 'db.json.bak')); } catch { /* нет файла */ }
   writeDb({
@@ -111,14 +111,14 @@ test('SP-07: запись без domains не роняет поиск по до�
   assert.equal(store.domainTaken('ok.example.com', 'nodomains'), true);
 });
 
-test('SP-07: wildcard-домены продолжают работать', (t) => {
+test('SP-07: wildcard-домены продолжают работать', () => {
   resetState();
   store.state.sites = [{ id: 'w', name: 'w', type: 'static', domains: ['*.example.com'] }];
   assert.equal(store.getSiteByDomain('a.example.com').id, 'w');
   assert.equal(store.getSiteByDomain('example.com'), null, 'сам apex не покрывается маской');
 });
 
-test('SP-06: сбой записи db.json виден вызывающему, а не проглатывается', (t) => {
+test('SP-06: сбой записи db.json виден вызывающему, а не проглатывается', () => {
   // Чистое состояние: выходим из аварийного режима новым загрузом валидного файла.
   store.state.sites = [{ id: 'x', name: 'x', type: 'static', domains: ['x.example.com'] }];
   writeDb({ sites: store.state.sites });
@@ -144,7 +144,7 @@ test('SP-06: сбой записи db.json виден вызывающему, а
   assert.equal(store.getLastSaveError(), null, 'после успешной записи ошибка сбрасывается');
 });
 
-test('SP-02: запись атомарна — наружу виден целый файл', (t) => {
+test('SP-02: запись атомарна — наружу виден целый файл', () => {
   const file = path.join(DATA_DIR, 'atomic.json');
   secure.writePrivateAtomic(file, '{"a":1}');
   assert.equal(fs.readFileSync(file, 'utf8'), '{"a":1}');
@@ -157,7 +157,7 @@ test('SP-02: запись атомарна — наружу виден целы�
   }
 });
 
-test('SP-02: ошибка записи не оставляет временный файл', (t) => {
+test('SP-02: ошибка записи не оставляет временный файл', () => {
   const sub = path.join(DATA_DIR, 'nested');
   fs.mkdirSync(sub, { recursive: true });
   const realRename = fs.renameSync;

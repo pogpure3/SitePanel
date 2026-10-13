@@ -328,7 +328,7 @@ router.delete('/sites/:id/domains/:domain', wrap(async (req, res) => {
 router.post('/sites/:id/ssl/selfsigned', wrap(async (req, res) => {
   const site = findSite(req);
   if (!site.domains.length) return res.status(400).json({ error: 'Сначала привяжите домен' });
-  certs.issueSelfSigned(site);
+  await certs.issueSelfSigned(site);
   res.json({ ok: true, ssl: site.ssl });
 }));
 

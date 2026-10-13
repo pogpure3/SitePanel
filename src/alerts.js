@@ -161,12 +161,13 @@ async function send(text) {
   return false;
 }
 
-async function checkMetric(kind, label, pct, threshold, extra) {
+async function checkMetric(kind, label, pct, threshold, extra, hostName) {
   const st = state[kind];
-  const a = store.state.settings.alerts;
   const above = pct >= threshold;
   const below = pct < threshold - HYSTERESIS;
-  const host = dashboard.snapshot().server.hostname;
+  // hostName передаётся снаружи: раньше checkMetric строила snapshot дашборда
+  // заново на каждую метрику (SP-23).
+  const host = hostName;
 
   if (above && (!st.alerted || Date.now() - st.lastSent > REPEAT_MS)) {
     const text = `⚠️ SitePanel [${host}]: ${label} — ${pct}% (порог ${threshold}%)${extra ? '\n' + extra : ''}`;
@@ -189,14 +190,16 @@ async function check() {
   const a = store.state.settings.alerts;
   if (!a || a.enabled === false) return;
   try {
+    // Один snapshot на всю проверку (SP-23), а не по одному на метрику.
     const snap = dashboard.snapshot();
+    const hostName = snap.server.hostname;
     if (snap.disk && snap.disk.pct !== null && snap.disk.total) {
       await checkMetric('disk', 'Диск', snap.disk.pct, a.diskThreshold,
-        `Занято ${fmtGb(snap.disk.used)} из ${fmtGb(snap.disk.total)} ГБ (${snap.disk.path})`);
+        `Занято ${fmtGb(snap.disk.used)} из ${fmtGb(snap.disk.total)} ГБ (${snap.disk.path})`, hostName);
     }
     if (snap.mem.pct !== null) {
       await checkMetric('mem', 'Память', snap.mem.pct, a.memThreshold,
-        `Занято ${fmtGb(snap.mem.used)} из ${fmtGb(snap.mem.total)} ГБ`);
+        `Занято ${fmtGb(snap.mem.used)} из ${fmtGb(snap.mem.total)} ГБ`, hostName);
     }
   } catch (err) {
     console.error('[alerts] check failed:', err.message);

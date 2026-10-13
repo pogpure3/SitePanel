@@ -113,11 +113,6 @@ a{color:#60a5fa}</style></head>
 <body><div class="card"><h1>${esc(title)}</h1><p>${body}</p></div></body></html>`;
 }
 
-/** Заглушка с экранированным текстом (body — обычный текст, не разметка). */
-function pageText(title, body) {
-  return page(title, esc(body));
-}
-
 function sendPlaceholder(res, code, title, body, extraHeaders) {
   // no-store: заглушки (404/403/503) не должны кэшироваться посредниками —
   // иначе временный сбой «прилипает» и скрывает настоящий контент.

@@ -72,13 +72,14 @@ function makeSandbox(overrides = {}) {
       contains: () => true,
       body: stubElement('body'),
     },
-    window: {},
+    // app.js подписывается на hashchange (U-12) и читает location.hash на старте.
+    window: { addEventListener() {} },
     setInterval: () => 0,
     clearInterval: () => {},
     setTimeout: () => 0,
     clearTimeout: () => {},
     fetch: async () => ({ ok: true, json: async () => ({}) }),
-    location: { reload() {} },
+    location: { reload() {}, hash: '' },
     FormData: function FormData() { this.append = () => {}; },
     XMLHttpRequest: function XMLHttpRequest() {
       this.open = () => {};

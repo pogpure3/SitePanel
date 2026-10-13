@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      # Синтаксис каждого файла — то, что раньше проверяли вручную перед выкладкой.
+      - name: node --check
+        run: find src tests -name '*.js' -type f -print0 | xargs -0 -n1 node --check
+      - name: eslint
+        run: npx eslint src tests
+      # Полный набор: на Linux поднимает реальные панели (GitHub runner — Ubuntu,
+      # как и боевые стенды). Медленный T-32 (~1 мин) включён сознательно.
+      - name: tests
+        run: node tests/run.js

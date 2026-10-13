@@ -10,7 +10,7 @@ const AdmZip = require('adm-zip');
 const { config } = require('../config');
 const store = require('../store');
 const alerts = require('../alerts');
-const { withSiteLock, forgetSiteLock, outsideLock } = require('./lock');
+const { withSiteLock, outsideLock } = require('./lock');
 const { detectManager, runCommand, isLockMismatch, killActiveCommands } = require('./deployfiles');
 const secure = require('../securefile');
 const sitelog = require('./sitelog');
@@ -87,7 +87,6 @@ function allocatePort() {
     const used = usedInternalPorts();
     const from = config.internalPortFrom;
     for (let p = from; p < from + 5000; p++) {
-      // eslint-disable-next-line no-await-in-loop
       if (await portAvailable(p, used)) return p;
     }
     throw new Error('Нет свободных внутренних портов');
@@ -507,9 +506,7 @@ async function waitListening(site, timeoutMs = config.appListenWaitMs) {
   if (site.type !== 'node' || !site.port) return { ok: true };
   const t0 = Date.now();
   while (Date.now() - t0 < Math.max(500, timeoutMs)) {
-    // eslint-disable-next-line no-await-in-loop
     if (await proc.portAnswers(site.port)) return { ok: true };
-    // eslint-disable-next-line no-await-in-loop
     await new Promise((r) => setTimeout(r, 250));
   }
   return { ok: false, reason: 'порт не открылся' };
@@ -1049,8 +1046,9 @@ async function finalizeDeploy(site, staging, opts = {}) {
 
     if (site.type === 'node') {
       if (opts.skipInstall) {
-        // Установка и сборка прошли на этапе клонирования (иначе бы деплой упал раньше).
-        delete site.lastDeployWarning;
+        // Установка и сборка прошли до подмены (P-04) или на этапе клонирования.
+        if (opts.installWarning) site.lastDeployWarning = opts.installWarning;
+        else delete site.lastDeployWarning;
       } else {
         const inst = await npmInstall(site);
         if (!inst.ok) site.lastDeployWarning = 'Установка зависимостей завершилась с ошибкой — сайт может не запуститься';
@@ -1134,20 +1132,34 @@ async function startAfterDeploy(site) {
 }
 
 /**
- * Полный деплой новой версии: стоп -> бэкап -> распаковка -> npm install -> старт.
+ * Полный деплой новой версии: распаковка и сборка в staging (прежняя версия
+ * продолжает работать) -> стоп -> подмена -> старт.
  * @param {object} site запись из БД
  * @param {string} zipPath путь к загруженному архиву
  */
 async function _deploy(site, zipPath) {
   const staging = path.join(config.tmpDir, 'deploy-' + site.id + '-' + Date.now());
   const wasRunning = isRunning(site);
-  deployBegin(site, 'деплой из архива');
-  if (wasRunning) await _stop(site);
 
+  // Сборка ДО deployBegin и остановки (P-04): окно 503 сокращается до
+  // «остановить -> подменить -> запустить», а неудачная сборка вообще не
+  // касается работающего сайта.
+  let installWarning = null;
   try {
     const info = extractZip(zipPath, staging);
     appendLog(site, `[panel] ${ts()} деплой из архива: ${info.files} файлов${info.strippedRoot ? ' (корневая папка архива раскрыта)' : ''}`);
-    await finalizeDeploy(site, staging);
+    const pre = await npmInstall(site, staging);
+    installWarning = pre.ok ? null : 'Установка зависимостей завершилась с ошибкой — сайт может не запуститься';
+  } catch (err) {
+    appendLog(site, `[panel] ${ts()} ОШИБКА деплоя: ${err.message}`);
+    fs.rmSync(staging, { recursive: true, force: true });
+    throw err;
+  }
+
+  deployBegin(site, 'деплой из архива');
+  try {
+    if (wasRunning) await _stop(site);
+    await finalizeDeploy(site, staging, { skipInstall: true, installWarning });
   } catch (err) {
     appendLog(site, `[panel] ${ts()} ОШИБКА деплоя: ${err.message}`);
     fs.rmSync(staging, { recursive: true, force: true });
@@ -1361,12 +1373,14 @@ async function _deployFromGit(site, { url, branch, token, subdir }) {
 
   const staging = path.join(config.tmpDir, 'deploy-' + site.id + '-' + Date.now());
   const wasRunning = isRunning(site);
-  if (wasRunning) await _stop(site);
-  deployBegin(site, 'деплой из Git');
 
   // Токен в URL не сохраняется — только в site.gitToken, наружу API его не отдаёт.
   const cloneUrl = token && url.startsWith('https://') ? url.replace('https://', 'https://x-access-token:' + token + '@') : url;
 
+  // Клонирование, подкаталог и сборка — ДО deployBegin и остановки сайта (P-04):
+  // прежняя версия обслуживает трафик, пока готовится новая; ошибка на этом
+  // этапе вообще не касается работающего сайта.
+  let installWarning = null;
   try {
     appendLog(site, `[panel] ${ts()} деплой из Git: ${url}${branch ? ' (ветка ' + branch + ')' : ''}${subdir ? ' [подкаталог ' + subdir + ']' : ''}`);
     await gitClone(cloneUrl, branch, staging);
@@ -1396,11 +1410,22 @@ async function _deployFromGit(site, { url, branch, token, subdir }) {
       }
       fs.rmSync(full, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
       // node_modules и собранный dist уже на месте — повторная установка не нужна.
-      await finalizeDeploy(site, staging, { skipInstall: true });
     } else {
       appendLog(site, `[panel] ${ts()} получено файлов: ${countFiles(staging)}`);
-      await finalizeDeploy(site, staging);
+      const pre = await npmInstall(site, staging);
+      installWarning = pre.ok ? null : 'Установка зависимостей завершилась с ошибкой — сайт может не запуститься';
     }
+  } catch (err) {
+    appendLog(site, `[panel] ${ts()} ОШИБКА деплоя из Git: ${err.message}`);
+    fs.rmSync(staging, { recursive: true, force: true });
+    fs.rmSync(staging + '.full', { recursive: true, force: true });
+    throw err;
+  }
+
+  deployBegin(site, 'деплой из Git');
+  try {
+    if (wasRunning) await _stop(site);
+    await finalizeDeploy(site, staging, { skipInstall: true, installWarning });
     site.gitUrl = url;
     site.gitBranch = branch;
     site.gitSubdir = subdir;

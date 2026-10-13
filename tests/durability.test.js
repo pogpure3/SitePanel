@@ -464,7 +464,7 @@ test('T-10: readLogTail читает только хвост большого ф
   const origReadSync = fs.readSync;
   let maxRequested = 0;
   let reads = 0;
-  fs.readSync = function patchedReadSync(fd2, buf, off, len, pos) {
+  fs.readSync = function patchedReadSync(fd2, buf, off, len, _pos) {
     if (len > maxRequested) maxRequested = len;
     reads++;
     return origReadSync.apply(this, arguments);
@@ -795,7 +795,7 @@ test('T-34: подделанный header.size отклоняется до со�
   const srcDir = path.join(work, 'src');
   fs.mkdirSync(srcDir, { recursive: true });
   fs.writeFileSync(path.join(srcDir, 'index.html'), '<h1>ok</h1>');
-  const zipPath = path.join(work, 'bomb.zip');
+  path.join(work, 'bomb.zip');
   const AdmZip = require(path.join(ROOT, 'node_modules', 'adm-zip'));
   const zip = new AdmZip();
   zip.addLocalFile(path.join(srcDir, 'index.html'));
@@ -1305,7 +1305,7 @@ test('P-31: extract=1 без confirm=1 отвергается, архив не �
  * M-01 — монитор стартует ПОСЛЕ manager.boot()
  * ========================================================================= */
 
-test('M-01: monitor/dashboard/alerts стартуют после manager.boot()', async (t) => {
+test('M-01: monitor/dashboard/alerts стартуют после manager.boot()', async () => {
   // Поведенчески гонку «тик монитора раньше подъёма сайтов» поймать нельзя:
   // первый тик отложен на 5 с, а boot() на быстром стенде успевает раньше.
   // Поэтому проверяем сам ПОРЯДОК в src/index.js: если монитор снова окажется
@@ -1354,7 +1354,7 @@ function patchCrc(buf) {
 
 test('T-34: архив с испорченным CRC при целых размерах отклоняется', async (t) => {
   ensureDataDirs();
-  const work = mkTmp(t);
+  mkTmp(t);
   const target = path.join(config.tmpDir, 'crc-target-34');
   t.after(() => rmrf(target));
 
@@ -1390,7 +1390,7 @@ test('T-34: архив с испорченным CRC при целых разм�
 
 test('T-34: архив с числом записей больше лимита отклоняется до распаковки', async (t) => {
   ensureDataDirs();
-  const work = mkTmp(t);
+  mkTmp(t);
   const target = path.join(config.tmpDir, 'entries-target-34');
   t.after(() => rmrf(target));
 
@@ -1420,7 +1420,7 @@ test('T-34: архив с числом записей больше лимита 
 
 test('T-34: подделанный размер «0» при реальных данных не растит память', async (t) => {
   ensureDataDirs();
-  const work = mkTmp(t);
+  mkTmp(t);
   const target = path.join(config.tmpDir, 'bomb0-target-34');
   t.after(() => rmrf(target));
 

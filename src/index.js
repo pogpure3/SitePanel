@@ -46,7 +46,7 @@ async function main() {
     // уничтожила бы прежний доступ. Останавливаемся с понятным сообщением.
     throw new Error('Учётные данные админ-панели не загружены (см. сообщение выше). Исправьте data/auth.json и перезапустите панель.');
   }
-  certs.ensureDefaultCert();
+  await certs.ensureDefaultCert();
 
   if (process.env.PANEL_NO_AUTH === '1') {
     console.warn('');
@@ -67,6 +67,10 @@ async function main() {
   const app = express();
   app.disable('x-powered-by');
   app.use(securityHeaders);
+  // Healthcheck для внешнего мониторинга самой панели (I-06): раньше /api/system
+  // требовал авторизацию, и следить за панелью снаружи было нечем. Отдаём только
+  // факт живости и аптайм — без версий, путей и количества сайтов.
+  app.get('/healthz', (_req, res) => res.json({ ok: true, uptimeSec: Math.round(process.uptime()) }));
   // Авторизация закрывает ВСЁ приложение админки, а не только /api.
   // Раньше middleware стоял лишь на /api (в admin/routes.js), поэтому оболочка
   // интерфейса — index.html, app.js, style.css — отдавалась без пароля: посторонний
@@ -88,7 +92,6 @@ async function main() {
 
   // Ошибки body-parser и multer приходят сюда: без этого клиент получал
   // HTML-страницу Express с 413/500 вместо JSON-контракта панели (H-11).
-  // eslint-disable-next-line no-unused-vars
   app.use((err, _req, res, _next) => {
     const status = Number(err && (err.status || err.statusCode)) || 500;
     let message = (err && err.message) || 'Внутренняя ошибка';
@@ -126,6 +129,20 @@ async function main() {
   dashboard.start();
   alerts.start();
   acme.startRenewalLoop();
+
+  // Почасовая уборка data/tmp (SP-14): чистка при старте не спасает от
+  // долгоживущего процесса — брошенные staging-каталоги копились неделями.
+  const tmpSweeper = setInterval(() => {
+    try {
+      const cleaned = require('./sites/deploymark').cleanTemp();
+      if (cleaned.files) {
+        console.log(`  [tmp] почасовая уборка: ${cleaned.files} объектов, ${Math.round(cleaned.bytes / 1048576)} МБ`);
+      }
+    } catch (err) {
+      console.error('[tmp] уборка не удалась:', err.message);
+    }
+  }, 3600000);
+  tmpSweeper.unref();
 
   console.log('');
   console.log('  SitePanel запущен. Каталог данных: ' + config.dataDir);

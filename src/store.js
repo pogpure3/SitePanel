@@ -17,7 +17,13 @@ const secure = require('./securefile');
 
 const SITE_TYPES = new Set(['node', 'static']);
 
+// Версия схемы состояния (SP-15). Файл без version — легаси до введения версий;
+// файл с БОЛЬШЕЙ версией читается как есть с предупреждением, чтобы откат панели
+// на старый код не молча терял новые поля.
+const STATE_VERSION = 1;
+
 const state = {
+  version: STATE_VERSION,
   sites: [],
   settings: {
     leEmail: config.leEmail,
@@ -105,8 +111,24 @@ function validateSite(raw) {
   return { site, why: null };
 }
 
+/**
+ * Миграция разобранного состояния (SP-15).
+ * @param {object} raw состояние из db.json
+ * @returns {number} версия, с которой читаем
+ */
+function migrate(raw) {
+  const from = typeof raw.version === 'number' && Number.isFinite(raw.version) ? raw.version : 0;
+  if (from > STATE_VERSION) {
+    console.error(`[store] db.json версии ${from} новее поддерживаемой ${STATE_VERSION} — читаю как есть; ` +
+      'поля новых версий сохранятся при следующей записи только если схема их допускает');
+  }
+  // Шаги миграций добавлять здесь: if (from < 2) { ... }
+  return from;
+}
+
 /** Применить разобранное состояние. Невалидные записи отбрасываются с логом. */
 function applyRaw(raw) {
+  migrate(raw);
   if (Array.isArray(raw.sites)) {
     const accepted = [];
     let dropped = 0;
@@ -133,6 +155,19 @@ function applyRaw(raw) {
     }
     Object.assign(state.settings, incoming);
   }
+
+  // Нормализация настроек: мусор в порогах (строка, NaN, вне диапазона) раньше
+  // отключал сравнение `pct >= threshold` непредсказуемым образом (SP-15).
+  for (const key of ['diskThreshold', 'memThreshold']) {
+    const v = Number(state.settings.alerts[key]);
+    if (!Number.isFinite(v) || v < 1 || v > 99) {
+      if (state.settings.alerts[key] !== undefined && state.settings.alerts[key] !== '') {
+        console.error(`[store] settings.alerts.${key}=${JSON.stringify(state.settings.alerts[key])} невалиден — оставлено 80`);
+      }
+      state.settings.alerts[key] = 80;
+    }
+  }
+  state.version = STATE_VERSION;
 }
 
 /**

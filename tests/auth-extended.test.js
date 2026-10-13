@@ -10,7 +10,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 
 const { startPanel, sleep } = require('./helpers/panel');
@@ -55,14 +54,12 @@ test('hashPassword: асинхронный и синхронный вариан�
 /* ---------- Аварийный старт с битым auth.json (SP-03) ---------- */
 
 test('SP-03: битый auth.json — панель не стартует и не затирает файл', async (t) => {
-  let dataDir = null;
   const broken = '{ "user": "admin", "hash": 12345';
   const res = await startPanel(
     { PANEL_NO_AUTH: '' },
     {
       expectExit: true,
       prepare: (dir) => {
-        dataDir = dir;
         fs.writeFileSync(path.join(dir, 'auth.json'), broken);
       },
     }

@@ -14,18 +14,48 @@ let refreshSeq = 0;        // маркер свежести: устаревши�
 
 /* ---------- API ---------- */
 
-async function api(method, path, body) {
+const API_DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // деплой может идти минутами
+
+async function api(method, path, body, opts = {}) {
   // X-Requested-With обязателен: сервер отклоняет мутирующие запросы без него (защита от CSRF).
-  const opts = { method, headers: { 'X-Requested-With': 'XMLHttpRequest' } };
+  const init = { method, headers: { 'X-Requested-With': 'XMLHttpRequest' } };
   if (body !== undefined) {
-    opts.headers['Content-Type'] = 'application/json';
-    opts.body = JSON.stringify(body);
+    init.headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(body);
   }
-  const res = await fetch(path, opts);
+  // Таймаут (U-11): зависший запрос раньше оставлял интерфейс «замороженным»
+  // без сообщения. ctl.abort() отклоняет fetch — ниже превращаем в понятную ошибку.
+  const timeoutMs = opts.timeoutMs || API_DEFAULT_TIMEOUT_MS;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(path, { ...init, signal: ctl.signal });
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error(`Таймаут: сервер не ответил за ${Math.round(timeoutMs / 1000)} с`);
+    throw new Error('Нет связи с панелью: ' + err.message);
+  } finally {
+    clearTimeout(timer);
+  }
   let data = {};
   try { data = await res.json(); } catch { /* пустой ответ */ }
   if (!res.ok) throw new Error(data.error || `Ошибка ${res.status}`);
   return data;
+}
+
+// Глобальный индикатор загрузки для multipart-загрузок (U-11).
+function showProgress(pct) {
+  const box = document.getElementById('globalProgress');
+  if (!box) return;
+  box.classList.remove('hidden');
+  box.querySelector('.global-progress-bar').style.width = (pct === undefined ? 40 : pct) + '%';
+}
+
+function hideProgress() {
+  const box = document.getElementById('globalProgress');
+  if (!box) return;
+  box.classList.add('hidden');
+  box.querySelector('.global-progress-bar').style.width = '0%';
 }
 
 async function apiUpload(path, formData, onProgress) {
@@ -34,15 +64,19 @@ async function apiUpload(path, formData, onProgress) {
     xhr.open('POST', path);
     xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
     xhr.upload.addEventListener('progress', (e) => {
-      if (e.lengthComputable && onProgress) onProgress(Math.round(e.loaded / e.total * 100));
+      if (!e.lengthComputable) return;
+      const pct = Math.round(e.loaded / e.total * 100);
+      showProgress(pct); // прогресс виден и там, где onProgress не передан (U-11)
+      if (onProgress) onProgress(pct);
     });
     xhr.addEventListener('load', () => {
+      hideProgress();
       let data = {};
       try { data = JSON.parse(xhr.responseText); } catch { /* noop */ }
       if (xhr.status >= 200 && xhr.status < 300) resolve(data);
       else reject(new Error(data.error || `Ошибка ${xhr.status}`));
     });
-    xhr.addEventListener('error', () => reject(new Error('Сетевая ошибка')));
+    xhr.addEventListener('error', () => { hideProgress(); reject(new Error('Сетевая ошибка')); });
     xhr.send(formData);
   });
 }
@@ -60,6 +94,8 @@ function openModal(id) {
   modalReturnFocus.set(id, active && active !== document.body ? active : null);
   if (focusBeforeModal === null) focusBeforeModal = active;
   backdrop.classList.remove('hidden');
+  // Фон не должен быть доступен скринридеру и Tab, пока окно открыто (U-04).
+  for (const el of document.querySelectorAll('#app, .topbar')) el.inert = true;
   // Фокус — на первый интерактивный элемент окна.
   const focusables = backdrop.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
   const first = [...focusables].find((el) => !el.disabled && el.offsetParent !== null);
@@ -70,6 +106,9 @@ function closeModal(id) {
   const backdrop = document.getElementById(id);
   if (!backdrop) return;
   backdrop.classList.add('hidden');
+  if (![...document.querySelectorAll('.modal-backdrop')].some((b) => !b.classList.contains('hidden'))) {
+    for (const el of document.querySelectorAll('#app, .topbar')) el.inert = false;
+  }
   const prev = modalReturnFocus.get(id);
   modalReturnFocus.delete(id);
   if (prev && document.contains(prev)) prev.focus();
@@ -214,20 +253,119 @@ function promptDialog(title, value = '') {
 
 /* ---------- Опрос и обновления ---------- */
 
+// Баннер состояния связи (U-01): раньше при 401 интерфейс вызывал location.reload(),
+// и с живым Basic-паролем это давало бесконечный цикл перезагрузок без сообщения,
+// а любые прочие ошибки молча глотались — экран показывал устаревшие данные.
+function showBanner(text, sticky) {
+  const banner = document.getElementById('connBanner');
+  if (!banner) return;
+  banner.textContent = text;
+  banner.classList.remove('hidden');
+  banner.classList.toggle('sticky', !!sticky);
+}
+
+function hideBanner() {
+  const banner = document.getElementById('connBanner');
+  if (banner) banner.classList.add('hidden');
+}
+
+let pollInFlight = false;
+let pollFailures = 0;
+
 function startPolling() {
-  clearInterval(pollTimer);
-  pollTimer = setInterval(async () => {
-    // Не обновляем, пока пользователь печатает в поле ввода.
-    const a = document.activeElement;
-    if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT')) return;
+  clearTimeout(pollTimer);
+  schedulePoll(5000);
+}
+
+function schedulePoll(delayMs) {
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(pollTick, delayMs);
+}
+
+async function pollTick() {
+  // Скрытая вкладка не должна генерировать запросы (U-12);
+  // ответ дольше интервала — не наслаиваемся вторым тиком.
+  if (document.hidden || pollInFlight) {
+    schedulePoll(5000);
+    return;
+  }
+  // Не обновляем, пока пользователь печатает в поле ввода.
+  const a = document.activeElement;
+  if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT')) {
+    schedulePoll(5000);
+    return;
+  }
+  pollInFlight = true;
+  try {
     await refreshCurrentView();
-  }, 5000);
+    if (pollFailures > 0) {
+      pollFailures = 0;
+      hideBanner();
+    }
+    schedulePoll(5000);
+  } catch (err) {
+    pollFailures++;
+    const msg = String(err.message || '');
+    if (msg.includes('Требуется авторизация')) {
+      // 401 при живом Basic браузер сам повторяет: reload дал бы бесконечный цикл.
+      stopPolling();
+      showBanner('Сессия истекла. Обновите страницу (F5) и введите пароль.', true);
+      return;
+    }
+    // Экспоненциальный бэкофф: 10с → 20с → 40с → потолок 60с.
+    showBanner('Нет связи с панелью — показаны устаревшие данные. Повтор через ' +
+      Math.min(60, 10 * Math.pow(2, Math.min(pollFailures - 1, 3))) + 'с.');
+    schedulePoll(Math.min(60000, 10000 * Math.pow(2, Math.min(pollFailures - 1, 3))));
+  } finally {
+    pollInFlight = false;
+  }
+}
+
+function stopPolling() {
+  clearTimeout(pollTimer);
+  pollTimer = null;
 }
 
 function stopLogTimer() {
   clearInterval(activeLogTimer);
   activeLogTimer = null;
 }
+
+/* ---------- Hash-роутинг (U-12) ---------- */
+
+function viewToHash(v) {
+  if (v.name === 'site') return '#/sites/' + v.id;
+  if (v.name === 'files') return '#/sites/' + v.id + '/files';
+  if (v.name === 'settings') return '#/settings';
+  if (v.name === 'list') return '#/sites';
+  return '#/';
+}
+
+function viewFromHash() {
+  const h = location.hash || '#/';
+  let m = /^#\/sites\/([A-Za-z0-9]+)\/files$/.exec(h);
+  if (m) return { name: 'files', id: m[1], path: '' };
+  m = /^#\/sites\/([A-Za-z0-9]+)/.exec(h);
+  if (m) return { name: 'site', id: m[1] };
+  if (h === '#/settings') return { name: 'settings' };
+  if (h === '#/sites') return { name: 'list' };
+  return { name: 'dashboard' };
+}
+
+/** Смена вида с записью в URL: «Назад» и закладки работают (U-12). */
+function navigate(v) {
+  view = v;
+  const target = viewToHash(v);
+  if (location.hash !== target) location.hash = target; // hashchange увидит совпадение и не отрисует второй раз
+  render();
+}
+
+window.addEventListener('hashchange', () => {
+  const next = viewFromHash();
+  if (viewToHash(view) === location.hash) return; // это мы сами через navigate()
+  view = next;
+  render();
+});
 
 // Точечное обновление текущего вида без перестроения страницы.
 async function refreshCurrentView() {
@@ -264,8 +402,13 @@ async function refreshCurrentView() {
     loadSysInfo();
   } catch (err) {
     const msg = String(err.message || '');
-    if (msg.includes('Требуется авторизация')) location.reload();
-    else if (msg.includes('не найден') && view.name === 'site') { view = { name: 'list' }; render(); }
+    if (msg.includes('Требуется авторизация') || msg.includes('Ошибка 401')) {
+      stopPolling();
+      showBanner('Сессия истекла. Обновите страницу (F5) и введите пароль.', true);
+      throw err; // чтобы pollTick остановил бэкофф-логику на 401
+    }
+    if (msg.includes('не найден') && view.name === 'site') navigate({ name: 'list' });
+    else throw err;
   }
 }
 
@@ -289,7 +432,12 @@ async function render() {
     loadSysInfo();
   } catch (err) {
     const msg = String(err.message || '');
-    if (msg.includes('Требуется авторизация')) location.reload();
+    if (msg.includes('Требуется авторизация') || msg.includes('Ошибка 401')) {
+      stopPolling();
+      showBanner('Сессия истекла. Обновите страницу (F5) и введите пароль.', true);
+      return;
+    }
+    showBanner('Не удалось загрузить данные: ' + msg);
   }
 }
 
@@ -310,6 +458,7 @@ function siteUrl(s) {
 }
 
 function renderList(sites) {
+  stopLogTimer(); // ушед со страницы сайта, не опрашиваем его логи (U-09)
   document.title = 'SitePanel — панель управления сайтами';
   if (!sites.length) {
     app.innerHTML = `
@@ -346,17 +495,29 @@ function renderList(sites) {
     card.addEventListener('click', (e) => {
       const interactive = e.target.closest('button, a');
       if (interactive && !interactive.hasAttribute('data-open')) return;
-      view = { name: 'site', id };
-      render();
+      navigate({ name: 'site', id });
     });
     // Кнопки есть не у всех состояний — привязываем один раз, видимость переключаем.
+    // Кнопка блокируется на время операции: двойной клик не шлёт два запроса (U-11).
     const action = (sel, fn) => {
       const btn = card.querySelector(sel);
-      if (btn) btn.addEventListener('click', () => fn().catch((err) => toast(err.message, 'error')));
+      if (!btn) return;
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          const r = await fn();
+          if (r && r.ok === false) throw new Error(r.error || 'Операция не выполнена');
+        } catch (err) {
+          toast(err.message, 'error');
+        } finally {
+          btn.disabled = false;
+          refreshCurrentView().catch(() => {});
+        }
+      });
     };
-    action('.act-start', async () => { await api('POST', `/api/sites/${id}/start`); toast('Сайт запускается', 'success'); refreshCurrentView(); });
-    action('.act-stop', async () => { await api('POST', `/api/sites/${id}/stop`); toast('Сайт остановлен', 'success'); refreshCurrentView(); });
-    action('.act-restart', async () => { await api('POST', `/api/sites/${id}/restart`); toast('Перезапуск...', 'success'); refreshCurrentView(); });
+    action('.act-start', () => api('POST', `/api/sites/${id}/start`).then((r) => { toast(r.ok === false ? 'Не запустился: ' + (r.error || '') : 'Сайт запускается', r.ok === false ? 'error' : 'success'); return r; }));
+    action('.act-stop', () => api('POST', `/api/sites/${id}/stop`).then((r) => { toast(r.ok === false ? 'Не остановился: ' + (r.error || '') : 'Сайт остановлен', r.ok === false ? 'error' : 'success'); return r; }));
+    action('.act-restart', () => api('POST', `/api/sites/${id}/restart`).then((r) => { toast('Перезапуск...', 'success'); return r; }));
     patchCard(card, site() || {});
   });
 }
@@ -398,9 +559,13 @@ function patchCard(card, s) {
 
 /* ---------- Страница сайта ---------- */
 
+function fmtTime(ts) {
+  return new Date(ts).toLocaleTimeString('ru-RU');
+}
+
 function healthStripHtml(history) {
   const cells = (history || []).slice(-40).map((h) =>
-    `<span class="health-cell ${h.ok ? 'ok' : 'fail'}" title="${esc(new Date(h.t).toLocaleTimeString('ru-RU') + ' · ' + (h.code || 'нет ответа') + ' · ' + h.ms + 'мс')}"></span>`
+    `<span class="health-cell ${h.ok ? 'ok' : 'fail'}" title="${esc(fmtTime(h.t) + ' · ' + (h.code || 'нет ответа') + ' · ' + h.ms + 'мс')}"></span>`
   ).join('');
   return cells || '<p class="hint">История проверок появится через несколько минут.</p>';
 }
@@ -429,6 +594,7 @@ function renderSite(site) {
         <h1><span class="status-dot" id="dStatusDot"></span> <span id="dName">${esc(site.name)}</span></h1>
         <span class="ssl-slot" id="dSslBadge"></span>
         <span class="loop-slot" id="dLoopBadge"></span>
+        <button class="btn btn-sm" id="renameSiteBtn" title="Переименовать сайт">✎</button>
       </div>
 
       <div class="detail-grid">
@@ -445,6 +611,7 @@ function renderSite(site) {
             <dt>Создан</dt><dd id="dCreated"></dd>
             <dt>Git</dt><dd id="dGit">—</dd>
           </dl>
+          <label class="checkbox" style="margin-top:10px"><input type="checkbox" id="autoStartBox"> Запускать автоматически при старте панели</label>
           <div class="warn hidden" id="dWarn"></div>
           <div class="actions-row">
             <button class="btn btn-sm btn-success act-start">▶ Запустить</button>
@@ -464,7 +631,7 @@ function renderSite(site) {
           <h2>Домены</h2>
           <div class="domain-list" id="domainList"></div>
           <form class="inline-form" id="addDomainForm">
-            <input type="text" name="domain" placeholder="example.com или *.example.com" autocomplete="off">
+            <input type="text" name="domain" placeholder="example.com или *.example.com" aria-label="Домен для привязки" autocomplete="off">
             <button class="btn btn-primary" type="submit">Привязать</button>
           </form>
           <p class="domain-hint">После привязки домена создайте A-запись, указывающую на IP этого сервера. Для wildcard <code>*.domain</code> сертификат Let's Encrypt не выпускается (нужен DNS-01), но маршрутизация работает.</p>
@@ -484,7 +651,7 @@ function renderSite(site) {
         <div class="panel">
           <h2>Мониторинг</h2>
           <div id="dHealth"></div>
-          <div id="dHealthStrip"></div>
+          <div class="health-strip" id="dHealthStrip"></div>
         </div>
 
         <div class="panel span2">
@@ -506,22 +673,68 @@ function renderSite(site) {
       </div>
     </div>`;
 
-  document.getElementById('backBtn').onclick = () => { view = { name: 'list' }; render(); };
+  document.getElementById('backBtn').onclick = () => navigate({ name: 'list' });
 
   const siteId = site.id;
+  // Кнопка блокируется на время операции (U-11): двойной клик не шлёт второй
+  // DELETE/rollback; {ok:false} при HTTP 200 показывается как ошибка (U-08).
   const act = (sel, fn) => {
     const el = app.querySelector(sel);
-    if (el) el.addEventListener('click', () => fn().catch((err) => toast(err.message, 'error')));
+    if (!el) return;
+    el.addEventListener('click', async () => {
+      el.disabled = true;
+      try {
+        const r = await fn();
+        if (r && r.ok === false) throw new Error(r.error || 'Операция не выполнена');
+      } catch (err) {
+        toast(err.message, 'error');
+      } finally {
+        el.disabled = false;
+        refreshCurrentView().catch(() => {});
+      }
+    });
   };
-  act('.act-start', async () => { await api('POST', `/api/sites/${siteId}/start`); toast('Сайт запускается', 'success'); refreshCurrentView(); });
-  act('.act-stop', async () => { await api('POST', `/api/sites/${siteId}/stop`); toast('Сайт остановлен', 'success'); refreshCurrentView(); });
-  act('.act-restart', async () => { await api('POST', `/api/sites/${siteId}/restart`); toast('Перезапуск...', 'success'); refreshCurrentView(); });
-  act('.act-files', () => { view = { name: 'files', id: siteId, path: '' }; render(); });
+  act('.act-start', async () => {
+    const r = await api('POST', `/api/sites/${siteId}/start`);
+    toast(r.ok === false ? 'Не запустился: ' + (r.error || '') : 'Сайт запускается', r.ok === false ? 'error' : 'success');
+    return r;
+  });
+  act('.act-stop', async () => {
+    const r = await api('POST', `/api/sites/${siteId}/stop`);
+    toast(r.ok === false ? 'Не остановился: ' + (r.error || '') : 'Сайт остановлен', r.ok === false ? 'error' : 'success');
+    return r;
+  });
+  act('.act-restart', () => api('POST', `/api/sites/${siteId}/restart`).then(() => toast('Перезапуск...', 'success')));
+  act('.act-files', () => { navigate({ name: 'files', id: siteId, path: '' }); });
   act('.act-rollback', async () => {
-    if (await confirmDialog('Откатить версию?', 'Текущая версия будет заменена предыдущей (бэкапом).')) {
-      await api('POST', `/api/sites/${siteId}/rollback`);
-      toast('Откат выполнен', 'success');
+    if (!(await confirmDialog('Откатить версию?', 'Текущая версия будет заменена предыдущей (бэкапом).'))) return undefined;
+    const r = await api('POST', `/api/sites/${siteId}/rollback`);
+    toast(r.ok === false ? 'Откат не удался: ' + (r.error || '') : 'Откат выполнен', r.ok === false ? 'error' : 'success');
+    return r;
+  });
+
+  // Переименование и автозапуск (U-03): раньше были доступны только через API.
+  const renameBtn = document.getElementById('renameSiteBtn');
+  renameBtn.onclick = async () => {
+    const name = await promptDialog('Новое название сайта', site.name);
+    if (!name || name === site.name) return;
+    try {
+      await api('PATCH', `/api/sites/${siteId}`, { name });
+      toast('Сайт переименован', 'success');
       render();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+  const autoStartBox = document.getElementById('autoStartBox');
+  autoStartBox.checked = !!site.autoStart;
+  autoStartBox.addEventListener('change', async () => {
+    try {
+      await api('PATCH', `/api/sites/${siteId}`, { autoStart: autoStartBox.checked });
+      toast(autoStartBox.checked ? 'Автозапуск включён' : 'Автозапуск выключен', 'success');
+    } catch (err) {
+      toast(err.message, 'error');
+      autoStartBox.checked = !!site.autoStart;
     }
   });
 
@@ -534,6 +747,7 @@ function renderSite(site) {
     try {
       toast('Деплой новой версии...');
       const r = await apiUpload(`/api/sites/${siteId}/update`, fd);
+      // ok:false при HTTP 200 значит «распаковано, но не запустилось» (U-08).
       if (r.ok) toast('Сайт обновлён', 'success');
       // Новая версия не запустилась: панель уже вернула предыдущую из бэкапа.
       else toast((r.result && r.result.error) || 'Деплой завершился, но сайт не запустился', 'error');
@@ -563,6 +777,19 @@ function renderSite(site) {
     } catch (err) {
       toast(err.message, 'error');
     }
+  });
+
+  // Отвязка домена (U-08): список рендерится в patchDetail.
+  app.querySelectorAll('[data-rm-domain]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        await api('DELETE', `/api/sites/${siteId}/domains/${encodeURIComponent(btn.dataset.rmDomain)}`);
+        toast('Домен отвязан', 'success');
+        render();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
   });
 
   // SSL
@@ -611,11 +838,13 @@ function renderSite(site) {
 
   // Удаление
   document.getElementById('deleteSiteBtn').addEventListener('click', async () => {
-    if (await confirmDialog(`Удалить сайт «${site.name}»?`, 'Файлы сайта, логи и сертификаты будут удалены безвозвратно.')) {
+    if (!(await confirmDialog(`Удалить сайт «${site.name}»?`, 'Файлы сайта, логи и сертификаты будут удалены безвозвратно.'))) return;
+    try {
       await api('DELETE', `/api/sites/${siteId}`);
       toast('Сайт удалён', 'success');
-      view = { name: 'list' };
-      render();
+      navigate({ name: 'list' });
+    } catch (err) {
+      toast(err.message, 'error');
     }
   });
 
@@ -673,18 +902,28 @@ function patchDetail(site) {
     : '<p class="hint">Проверки выполняются каждые 30 секунд.</p>';
   document.getElementById('dHealthStrip').innerHTML = healthStripHtml(site.history);
   document.getElementById('dSslInfo').innerHTML = sslInfoHtml(site);
+
+  // Домены с кнопкой отвязки (U-08): раньше #domainList никогда не заполнялся.
+  const domainBox = document.getElementById('domainList');
+  if (domainBox) {
+    const domains = Array.isArray(site.domains) ? site.domains : [];
+    domainBox.innerHTML = domains.length
+      ? domains.map((d) =>
+          `<div class="domain-row"><span>${esc(d)}</span>` +
+          `<button class="remove" data-rm-domain="${esc(d)}" title="Отвязать ${esc(d)}" aria-label="Отвязать домен ${esc(d)}">✕</button></div>`
+        ).join('')
+      : '<p class="hint">Домены не привязаны.</p>';
+    domainBox.querySelectorAll('[data-rm-domain]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        api('DELETE', `/api/sites/${site.id}/domains/${encodeURIComponent(btn.dataset.rmDomain)}`)
+          .then(() => { toast('Домен отвязан', 'success'); render(); })
+          .catch((err) => toast(err.message, 'error'));
+      });
+    });
+  }
 }
 
 /* ---------- Файловый менеджер ---------- */
-
-const TEXT_EXT = new Set(['js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'json', 'html', 'htm', 'css', 'scss', 'less', 'txt', 'md', 'log', 'env', 'yml', 'yaml', 'xml', 'csv', 'sh', 'bash', 'py', 'conf', 'ini', 'toml', 'svg', 'gitignore', 'dockerfile', 'example', 'sql', 'lock', 'map', 'htaccess', 'properties']);
-
-function isTextFile(name) {
-  const base = name.split('/').pop();
-  if (!base.includes('.')) return true; // Dockerfile, .env, LICENSE и т.п.
-  const ext = base.startsWith('.') ? base.slice(1).split('.').pop() : base.split('.').pop();
-  return TEXT_EXT.has((ext || '').toLowerCase());
-}
 
 function fmJoin(...parts) {
   return parts.filter(Boolean).join('/').replace(/\/+/g, '/');
@@ -735,7 +974,7 @@ async function renderFiles() {
         <h1>📁 Файлы</h1>
       </div>
       <div class="panel"><p class="hint">${esc(err.message)}</p></div>`;
-    document.getElementById('backBtn').onclick = () => { view = { name: 'site', id: view.id }; render(); };
+    document.getElementById('backBtn').onclick = () => navigate({ name: 'site', id: view.id });
     return;
   }
 
@@ -789,7 +1028,7 @@ async function renderFiles() {
   const nav = (p) => { view.path = p; renderFiles(); };
   const siteId = view.id;
 
-  document.getElementById('backBtn').onclick = () => { view = { name: 'site', id: siteId }; render(); };
+  document.getElementById('backBtn').onclick = () => navigate({ name: 'site', id: siteId });
   document.getElementById('fmRefresh').onclick = () => renderFiles();
   document.querySelectorAll('#fmCrumbs a').forEach((a) => (a.onclick = () => nav(a.dataset.crumb)));
 
@@ -895,6 +1134,7 @@ function ring(pct, color) {
 }
 
 function renderDashboard(data) {
+  stopLogTimer(); // ушед со страницы сайта, не опрашиваем его логи (U-09)
   document.title = 'Дашборд — SitePanel';
   app.innerHTML = `
     <div id="dashRoot">
@@ -1060,15 +1300,19 @@ function renderSettings(settings, system) {
       </div>
     </div>`;
 
-  document.getElementById('backBtn').onclick = () => { view = { name: 'list' }; render(); };
+  document.getElementById('backBtn').onclick = () => navigate({ name: 'list' });
 
   document.getElementById('leForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    await api('PUT', '/api/settings', {
-      leEmail: e.target.leEmail.value,
-      leStaging: e.target.leStaging.checked,
-    });
-    toast('Настройки сохранены', 'success');
+    try {
+      await api('PUT', '/api/settings', {
+        leEmail: e.target.leEmail.value,
+        leStaging: e.target.leStaging.checked,
+      });
+      toast('Настройки сохранены', 'success');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   });
 
   document.getElementById('alertForm').addEventListener('submit', async (e) => {
@@ -1116,22 +1360,28 @@ function renderSettings(settings, system) {
 
 /* ---------- Инициализация ---------- */
 
-document.getElementById('brandBtn').addEventListener('click', () => { view = { name: 'list' }; render(); });
-document.getElementById('listBtn').addEventListener('click', () => { view = { name: 'list' }; render(); });
-document.getElementById('dashBtn').addEventListener('click', () => { view = { name: 'dashboard' }; render(); });
-document.getElementById('settingsBtn').addEventListener('click', () => { view = { name: 'settings' }; render(); });
+document.getElementById('brandBtn').addEventListener('click', () => navigate({ name: 'list' }));
+document.getElementById('listBtn').addEventListener('click', () => navigate({ name: 'list' }));
+document.getElementById('dashBtn').addEventListener('click', () => navigate({ name: 'dashboard' }));
+document.getElementById('settingsBtn').addEventListener('click', () => navigate({ name: 'settings' }));
 
 document.getElementById('addSiteBtn').addEventListener('click', () => {
   openModal('addModal');
 });
 
 // Закрытие модалок: клик по подложке и кнопки «Отмена».
+// Во время операции (busy) закрытие блокируется — как Escape (U-04).
 document.querySelectorAll('.modal-backdrop').forEach((backdrop) => {
   backdrop.addEventListener('click', (e) => {
-    if (e.target === backdrop) closeModal(backdrop.id);
+    if (e.target !== backdrop) return;
+    if (backdrop.dataset.busy === '1') return;
+    closeModal(backdrop.id);
   });
   backdrop.querySelectorAll('[data-close]').forEach((btn) => {
-    btn.addEventListener('click', () => closeModal(backdrop.id));
+    btn.addEventListener('click', () => {
+      if (backdrop.dataset.busy === '1') return;
+      closeModal(backdrop.id);
+    });
   });
 });
 
@@ -1181,8 +1431,7 @@ document.getElementById('addForm').addEventListener('submit', async (e) => {
     form.reset();
     syncSourceFields();
     toast(`Сайт «${site.name}» развёрнут (${site.type === 'node' ? 'Node.js' : 'статика'})`, 'success');
-    view = { name: 'site', id: site.id };
-    render();
+    navigate({ name: 'site', id: site.id });
   } catch (err) {
     toast(err.message, 'error');
   } finally {
@@ -1192,5 +1441,6 @@ document.getElementById('addForm').addEventListener('submit', async (e) => {
   }
 });
 
+view = viewFromHash(); // открытие по ссылке вида #/sites/<id> (U-12)
 render();
 startPolling();

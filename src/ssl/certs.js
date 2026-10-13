@@ -23,15 +23,18 @@ function defaultDir() {
 }
 
 /* ---------- Self-signed ---------- */
-
-// Параметры self-signed. algorithm задаём явно: у selfsigned по умолчанию
-// 'sha1', и сертификат с подписью SHA-1 современные клиенты (Chrome, Firefox,
-// curl с OpenSSL 3) отвергают на уровне рукопожатия, ещё до проверки цепочки.
-// Симптом ровно такой: `curl https://127.0.0.1:8443/` падает с
-// `TLS alert handshake failure`, хотя `openssl s_client` соединение устанавливает.
+// algorithm задаём явно: у selfsigned по умолчанию 'sha1', и сертификат с
+// подписью SHA-1 современные клиенты (Chrome, Firefox, curl с OpenSSL 3)
+// отвергают на уровне рукопожатия, ещё до проверки цепочки. Симптом ровно
+// такой: `curl https://127.0.0.1:8443/` падает с `TLS alert handshake failure`,
+// хотя `openssl s_client` соединение устанавливает.
 const SIGN_ALGORITHM = 'sha256';
 
-function ensureDefaultCert() {
+// В selfsigned 5.x generate() асинхронный (I-03): обе функции выпуска стали
+// async, вызывающие ждут их. algorithm задаём явно: значение по умолчанию —
+// 'sha1', и сертификат с подписью SHA-1 современные клиенты отвергают на
+// уровне рукопожатия.
+async function ensureDefaultCert() {
   const dir = defaultDir();
   const keyFile = path.join(dir, 'privkey.pem');
   const crtFile = path.join(dir, 'fullchain.pem');
@@ -41,7 +44,7 @@ function ensureDefaultCert() {
   // вместе с размещёнными сайтами.
   if (fs.existsSync(keyFile) && fs.existsSync(crtFile)) return;
   secure.mkdirPrivate(dir);
-  const pems = selfsigned.generate([{ name: 'commonName', value: 'sitepanel.local' }], {
+  const pems = await selfsigned.generate([{ name: 'commonName', value: 'sitepanel.local' }], {
     days: 825,
     keySize: 2048,
     algorithm: SIGN_ALGORITHM,
@@ -51,13 +54,13 @@ function ensureDefaultCert() {
   secure.writePrivate(crtFile, pems.cert, 0o644);
 }
 
-function issueSelfSigned(site) {
+async function issueSelfSigned(site) {
   const domains = site.domains.length ? site.domains : ['localhost'];
   const altNames = domains
     .filter((d) => !d.startsWith('*'))
     .map((d) => ({ type: 2, value: d }));
   if (!altNames.length) altNames.push({ type: 2, value: 'localhost' });
-  const pems = selfsigned.generate([{ name: 'commonName', value: domains[0].replace('*.', 'wild.') }], {
+  const pems = await selfsigned.generate([{ name: 'commonName', value: domains[0].replace('*.', 'wild.') }], {
     days: 825,
     keySize: 2048,
     algorithm: SIGN_ALGORITHM,
@@ -105,7 +108,7 @@ function removeCertFiles(site) {
 
 /* ---------- SNI ---------- */
 
-function buildContext(site, fallback) {
+function buildContext(site) {
   const files = site ? readCertFiles(site) : null;
   const dir = site ? certDir(site) : defaultDir();
   const stamp = site ? JSON.stringify(site.ssl && site.ssl.status) + fileStamp(dir) : fileStamp(dir);

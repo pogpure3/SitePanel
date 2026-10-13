@@ -19,7 +19,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 
-const { startPanel, api, fetchWithHost, makeZip, sleep } = require('./helpers/panel');
+const { startPanel, api, makeZip, sleep } = require('./helpers/panel');
 
 const isPosix = process.platform !== 'win32';
 
