@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вход — SitePanel</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%232563eb'/><text x='50' y='72' font-size='62' font-family='sans-serif' font-weight='bold' fill='white' text-anchor='middle'>S</text></svg>">
+  <style>
+    /* Страница входа самодостаточна: style.css закрыт авторизацией, поэтому
+       нужные токены и стили повторены здесь и синхронизированы с палитрой панели. */
+    :root {
+      --bg: #0f1117;
+      --bg-card: #171b23;
+      --bg-hover: #1e242e;
+      --border: #262c38;
+      --text: #e6e9f0;
+      --text-dim: #8b93a7;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --red: #ef4444;
+    }
+    [data-theme="light"] {
+      --bg: #f4f6f9;
+      --bg-card: #ffffff;
+      --bg-hover: #eef1f6;
+      --border: #dfe3ec;
+      --text: #1c2230;
+      --text-dim: #5d6575;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .login-card {
+      width: 100%;
+      max-width: 380px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 32px 28px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
+    }
+    [data-theme="light"] .login-card { box-shadow: 0 1px 3px rgba(16, 24, 40, .08); }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      justify-content: center;
+      margin-bottom: 6px;
+    }
+    .brand svg { width: 34px; height: 34px; border-radius: 8px; }
+    .brand .logo-bg { fill: var(--primary); }
+    .brand-name { font-size: 19px; font-weight: 600; }
+    .brand-name b { color: #60a5fa; }
+    [data-theme="light"] .brand-name b { color: #1d4ed8; }
+    h1 { font-size: 15px; font-weight: 400; color: var(--text-dim); text-align: center; margin: 0 0 22px; }
+    label { display: block; font-size: 13px; color: var(--text-dim); margin-bottom: 14px; }
+    .pass-wrap { position: relative; margin-top: 6px; }
+    input[type="text"], input[type="password"] {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 9px 12px;
+      font-size: 14px;
+      font-family: inherit;
+    }
+    [data-theme="light"] input { background: #fff; }
+    input:focus { outline: none; border-color: var(--primary); }
+    .pass-wrap input { padding-right: 40px; }
+    .eye {
+      position: absolute;
+      right: 4px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      padding: 6px;
+      border-radius: 6px;
+      display: inline-flex;
+    }
+    .eye:hover { color: var(--text); background: var(--bg-hover); }
+    .eye svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .eye .eye-off { display: none; }
+    .eye.on .eye-off { display: block; }
+    .eye.on .eye-on { display: none; }
+    .login-error {
+      background: #450a0a;
+      border: 1px solid #991b1b;
+      color: #fecaca;
+      border-radius: 8px;
+      padding: 9px 12px;
+      font-size: 13px;
+      margin-bottom: 14px;
+    }
+    .login-error:empty { display: none; }
+    .login-btn {
+      width: 100%;
+      background: var(--primary);
+      border: 1px solid var(--primary);
+      color: #fff;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 14px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      margin-top: 4px;
+      transition: background .15s;
+    }
+    .login-btn:hover { background: var(--primary-hover); }
+    .login-btn:disabled { opacity: .6; cursor: wait; }
+    .login-hint { color: var(--text-dim); font-size: 12px; text-align: center; margin: 18px 0 0; line-height: 1.55; }
+    .login-theme {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      width: 36px;
+      height: 36px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text-dim);
+      cursor: pointer;
+      font-size: 16px;
+    }
+    .login-theme:hover { color: var(--text); }
+    :focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition-duration: .001ms !important; animation-duration: .001ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <button class="login-theme" id="themeBtn" title="Переключить тему" aria-label="Переключить тему"></button>
+
+  <main class="login-card">
+    <div class="brand">
+      <svg viewBox="0 0 100 100" aria-hidden="true"><rect width="100" height="100" rx="24" class="logo-bg"/><text x="50" y="73" font-size="64" font-family="system-ui, sans-serif" font-weight="700" fill="#fff" text-anchor="middle">S</text></svg>
+      <span class="brand-name">Site<b>Panel</b></span>
+    </div>
+    <h1>Вход в панель управления</h1>
+
+    <div class="login-error" id="err" role="alert"></div>
+
+    <form id="f" novalidate>
+      <label>Логин
+        <input type="text" name="user" autocomplete="username" autofocus>
+      </label>
+      <label>Пароль
+        <div class="pass-wrap">
+          <input type="password" name="password" autocomplete="current-password">
+          <button type="button" class="eye" id="eye" aria-label="Показать пароль" title="Показать пароль">
+            <svg class="eye-on" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+            <svg class="eye-off" viewBox="0 0 24 24"><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 10 8 10 8a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 8 10 8a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>
+          </button>
+        </div>
+      </label>
+      <button type="submit" class="login-btn" id="go">Войти</button>
+    </form>
+
+    <p class="login-hint">После 10 неудачных попыток вход с этого адреса<br>блокируется на 15 минут.</p>
+  </main>
+
+  <script src="/login.js"></script>
+</body>
+</html>

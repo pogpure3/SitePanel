@@ -276,15 +276,27 @@ function promptDialog(title, value = '') {
 
 /* ---------- Опрос и обновления ---------- */
 
-// Баннер состояния связи (U-01): раньше при 401 интерфейс вызывал location.reload(),
-// и с живым Basic-паролем это давало бесконечный цикл перезагрузок без сообщения,
-// а любые прочие ошибки молча глотались — экран показывал устаревшие данные.
+// Баннер состояния связи (U-01): ошибки API без истёкшей сессии показываем
+// баннером; 401 (сессия истекла / вход не выполнен) уводит на /login —
+// родной диалог Basic больше не используется нигде.
 function showBanner(text, sticky) {
   const banner = document.getElementById('connBanner');
   if (!banner) return;
   banner.textContent = text;
   banner.classList.remove('hidden');
   banner.classList.toggle('sticky', !!sticky);
+}
+
+/** Сессия истекла — на страницу входа, сохраняя, откуда ушли. */
+function redirectToLogin() {
+  stopPolling();
+  stopLogTimer();
+  const next = encodeURIComponent(location.pathname + location.search + location.hash || '/');
+  location.href = '/login?next=' + next;
+}
+
+function isAuthError(msg) {
+  return String(msg || '').includes('Требуется авторизация') || String(msg || '').includes('Ошибка 401');
 }
 
 function hideBanner() {
@@ -330,9 +342,8 @@ async function pollTick() {
     pollFailures++;
     const msg = String(err.message || '');
     if (msg.includes('Требуется авторизация')) {
-      // 401 при живом Basic браузер сам повторяет: reload дал бы бесконечный цикл.
-      stopPolling();
-      showBanner('Сессия истекла. Обновите страницу (F5) и введите пароль.', true);
+      // 401 при живой сессии: браузер сам не повторит — уводим на форму входа.
+      redirectToLogin();
       return;
     }
     // Экспоненциальный бэкофф: 10с → 20с → 40с → потолок 60с.
@@ -454,13 +465,11 @@ async function refreshCurrentView() {
     // terminal и users — статичные страницы, опрос им ничего не обновляет.
     loadSysInfo();
   } catch (err) {
-    const msg = String(err.message || '');
-    if (msg.includes('Требуется авторизация') || msg.includes('Ошибка 401')) {
-      stopPolling();
-      showBanner('Сессия истекла. Обновите страницу (F5) и введите пароль.', true);
+    if (isAuthError(err.message)) {
+      redirectToLogin();
       throw err; // чтобы pollTick остановил бэкофф-логику на 401
     }
-    if (msg.includes('не найден') && view.name === 'site') navigate({ name: 'list' });
+    if (String(err.message || '').includes('не найден') && view.name === 'site') navigate({ name: 'list' });
     else throw err;
   }
 }
@@ -497,13 +506,11 @@ async function render() {
     }
     loadSysInfo();
   } catch (err) {
-    const msg = String(err.message || '');
-    if (msg.includes('Требуется авторизация') || msg.includes('Ошибка 401')) {
-      stopPolling();
-      showBanner('Сессия истекла. Обновите страницу (F5) и введите пароль.', true);
+    if (isAuthError(err.message)) {
+      redirectToLogin();
       return;
     }
-    showBanner('Не удалось загрузить данные: ' + msg);
+    showBanner('Не удалось загрузить данные: ' + err.message);
   }
 }
 
@@ -1537,7 +1544,7 @@ async function renderUsers() {
             </tr>`).join('')}
           </tbody>
         </table>
-        <p class="hint" style="margin-top:12px">${esc(data.note || '')} Учетные данные хранятся в <code>data/auth.json</code> (scrypt), вход — HTTP Basic. Неудачные попытки ограничены: 10 за 5 минут с одного адреса — блокировка на 15 минут.</p>
+        <p class="hint" style="margin-top:12px">${esc(data.note || '')} Учетные данные хранятся в <code>data/auth.json</code> (scrypt); вход — через страницу <code>/login</code> (сессия в HttpOnly-cookie), для API и скриптов доступен HTTP Basic. Неудачные попытки ограничены: 10 за 5 минут с одного адреса — блокировка на 15 минут; смена пароля гасит все активные сессии.</p>
       </div>
 
       <div class="panel">
@@ -1746,6 +1753,14 @@ document.getElementById('usersBtn').addEventListener('click', () => navigate({ n
 document.getElementById('settingsBtn').addEventListener('click', () => navigate({ name: 'settings' }));
 document.getElementById('themeBtn').addEventListener('click', toggleTheme);
 applyThemeIcon();
+
+// Выход: гасим сессию на сервере и возвращаемся на форму входа.
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+  try {
+    await api('POST', '/api/logout', {});
+  } catch { /* сессия могла истечь — cookie всё равно сброшена */ }
+  location.href = '/login';
+});
 
 document.getElementById('collapseBtn').addEventListener('click', () => {
   document.body.classList.toggle('sidebar-collapsed');

@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const { config } = require('./config');
 const secure = require('./securefile');
 
-// Аутентификация админки: HTTP Basic + scrypt.
+// Аутентификация админки: HTTP Basic + scrypt + сессии формы входа.
 // При первом запуске генерируется случайный пароль и печатается в консоль.
 //
 // Важные свойства:
@@ -16,8 +16,13 @@ const secure = require('./securefile');
 //      с 50 мс) занимает event loop, который обслуживает и реверс-прокси сайтов,
 //      поэтому десяток параллельных запросов к админке замедлял отклик сайтов
 //      в сотни раз (A-01).
-//   3. Неудачные попытки ограничены: задержка + счётчик по IP + блокировка.
+//   3. Неудачные попытки ограничены: задержка + счётчик по IP + блокировка
+//      (общие для Basic и формы входа /login).
 //   4. Пароль, содержащий ':', не усекается — header режется по ПЕРВОМУ ':'.
+//   5. Форма входа (/login) выдаёт сессию — HttpOnly-cookie вместо родного
+//      браузерного диалога Basic. Cookie сессии НЕ авторизует мутирующие
+//      запросы сама по себе: CSRF-барьер (X-Requested-With + Origin) в
+//      admin/routes.js работает как прежде.
 
 let auth = null;
 
@@ -100,6 +105,79 @@ function registerSuccess(ip) {
 /** Текущее состояние счётчиков — используется в тестах. */
 function resetAttempts() {
   attempts.clear();
+}
+
+/* ---------- Сессии формы входа -------------------------------------------------
+ * Токен в HttpOnly-cookie (sp_session). Хранятся в памяти: рестарт панели
+ * сбрасывает все сессии — браузер просто вернётся на /login. TTL скользящий:
+ * каждый валидный запрос продлевает сессию, поэтому активный вход не рвётся.
+ * Смена пароля гасит все сессии разом (см. changePassword).
+ */
+
+const SESSION_COOKIE = 'sp_session';
+const SESSION_MAX = 512;
+// Часы; < 1 (включая 0 и мусор) — откат к 24.
+const SESSION_TTL_MS = Math.max(1, intEnv('PANEL_SESSION_TTL_H', 24)) * 3600000;
+
+/** @type {Map<string, number>} токен -> expiresAt */
+const sessions = new Map();
+
+/** Создать сессию. @returns {{token:string, maxAgeSec:number}} */
+function createSession() {
+  if (sessions.size >= SESSION_MAX) {
+    // Вытеснение самых старых по вставке: Map сохраняет порядок.
+    const oldest = sessions.keys().next().value;
+    if (oldest !== undefined) sessions.delete(oldest);
+  }
+  const token = crypto.randomBytes(24).toString('hex');
+  sessions.set(token, Date.now() + SESSION_TTL_MS);
+  return { token, maxAgeSec: Math.round(SESSION_TTL_MS / 1000) };
+}
+
+function validSessionShape(token) {
+  return typeof token === 'string' && /^[0-9a-f]{48}$/.test(token);
+}
+
+/**
+ * Проверить сессию; валидная продлевается (скользящий TTL).
+ */
+function isSessionValid(token) {
+  if (!validSessionShape(token)) return false;
+  const exp = sessions.get(token);
+  if (!exp) return false;
+  if (exp <= Date.now()) {
+    sessions.delete(token);
+    return false;
+  }
+  sessions.set(token, Date.now() + SESSION_TTL_MS);
+  return true;
+}
+
+function destroySession(token) {
+  if (validSessionShape(token)) sessions.delete(token);
+}
+
+function destroyAllSessions() {
+  sessions.clear();
+}
+
+/** Разбор Cookie-заголовка без зависимостей. Значения — в urlencode. */
+function parseCookies(header) {
+  const out = {};
+  for (const part of String(header || '').split(';')) {
+    const i = part.indexOf('=');
+    if (i <= 0) continue;
+    const name = part.slice(0, i).trim();
+    let value = part.slice(i + 1).trim();
+    try { value = decodeURIComponent(value); } catch { /* оставляем как есть */ }
+    if (name) out[name] = value;
+  }
+  return out;
+}
+
+/** Cookie-сессия из запроса (или null). */
+function sessionFromRequest(req) {
+  return parseCookies(req.headers.cookie)[SESSION_COOKIE] || null;
 }
 
 // --- Пароль --------------------------------------------------------------------
@@ -297,8 +375,7 @@ function verifyCacheSet(user, password) {
  * Проверка учётных данных. Асинхронная — см. пункт 2 в шапке файла.
  * @returns {Promise<boolean>}
  */
-async function checkCredentials(user, password) {
-  if (!auth) return false;
+async function checkCredentials(user, password) {  if (!auth) return false;
   if (typeof user !== 'string' || typeof password !== 'string') return false;
 
   // Успешная проверка кэшируется: Basic-схема заставляет перепроверять пароль на
@@ -383,6 +460,8 @@ function changePassword(newUser, password) {
   auth = { user, ...hashPassword(password, undefined, SCRYPT_OPTS), opts: SCRYPT_OPTS };
   // Прежние успешные проверки больше не действительны.
   invalidateVerifyCache();
+  // Сессии формы входа выданы на старые учётные данные — гасим все разом.
+  destroyAllSessions();
   persist();
   console.log(`[auth] пароль изменён (логин: ${JSON.stringify(user)})`);
   return { user };
@@ -427,11 +506,41 @@ function sleep(ms) {
 }
 
 /**
+ * Попытка входа через форму /login: те же счётчики и блокировка по IP, что и
+ * у Basic (общий антибрутфорс), тот же искусственный delay при неудаче.
+ * @returns {Promise<{ok:true}|{ok:false, status:number, error:string}>}
+ */
+async function attemptLogin(user, password, ip) {
+  if (!auth) return { ok: false, status: 500, error: 'Учётные данные не загружены' };
+  const left = lockoutLeft(ip);
+  if (left > 0) {
+    return {
+      ok: false,
+      status: 429,
+      error: `Слишком много неудачных попыток входа. Повторите через ${Math.ceil(left / 60000)} мин.`,
+    };
+  }
+  const ok = await checkCredentials(user, password);
+  if (ok) {
+    registerSuccess(ip);
+    return { ok: true };
+  }
+  registerFailure(ip, user);
+  if (LOGIN_FAIL_DELAY_MS > 0) await sleep(LOGIN_FAIL_DELAY_MS);
+  return { ok: false, status: 401, error: 'Неверный логин или пароль' };
+}
+
+/**
  * Express-middleware. PANEL_NO_AUTH=1 отключает проверку — для случаев,
  * когда авторизацию выполняет внешний реверс-прокси.
  */
 function middleware(req, res, next) {
   if (process.env.PANEL_NO_AUTH === '1') return next();
+
+  // Сессия формы входа: HttpOnly-cookie вместо родного браузерного диалога.
+  // Валидная сессия пропускает запрос без scrypt-проверки вовсе.
+  const sid = sessionFromRequest(req);
+  if (sid && isSessionValid(sid)) return next();
 
   const ip = clientIp(req);
   const left = lockoutLeft(ip);
@@ -482,6 +591,17 @@ function middleware(req, res, next) {
 
 function deny(res, req, message) {
   if (res.headersSent || res.writableEnded) return;
+  // Браузерная навигация (Accept: text/html) без учётных данных уводится на
+  // форму входа: родной диалог Basic больше не должен появляться никогда.
+  // Всё остальное — API, curl, подгрузка ресурсов — как прежде 401 JSON
+  // с WWW-Authenticate (контракт tests/auth.test.js).
+  const url = String(req.originalUrl || req.url || '');
+  const wantsPage = !url.startsWith('/api') && String(req.headers.accept || '').includes('text/html');
+  if (wantsPage) {
+    res.setHeader('Cache-Control', 'no-store');
+    res.writeHead(302, { Location: '/login?next=' + encodeURIComponent(url) });
+    return res.end();
+  }
   res.setHeader('WWW-Authenticate', 'Basic realm="SitePanel", charset="UTF-8"');
   // Ответ-отказ не должен кэшироваться: иначе браузер или посредник могут
   // закрепить 401 для статики и сломать вход после ввода пароля.
@@ -511,4 +631,13 @@ module.exports = {
   lockoutLeft,
   resetAttempts,
   isReady,
+  // Сессии формы входа (/login)
+  attemptLogin,
+  createSession,
+  isSessionValid,
+  destroySession,
+  SESSION_COOKIE,
+  parseCookies,
+  sessionFromRequest,
+  clientIp,
 };

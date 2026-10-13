@@ -640,5 +640,6 @@ module.exports = {
   page,
   realInside,
   originAllowed,
+  effectiveScheme,
 };
 

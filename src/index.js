@@ -17,6 +17,7 @@ const manager = require('./sites/manager');
 const { createServers, listenServers, securityHeaders } = require('./httpserver');
 const adminRoutes = require('./admin/routes');
 const terminal = require('./admin/terminal');
+const login = require('./admin/login');
 
 // Защита от повторного входа в шатдаун (два сигнала подряд).
 let shuttingDown = false;
@@ -79,6 +80,12 @@ async function main() {
   // на данные. Теперь без учётных данных не отдаётся ничего.
   // PANEL_NO_AUTH=1 внутри middleware оставляет прежнюю возможность отдать
   // авторизацию внешнему реверс-прокси.
+  // Страница входа и endpoints сессий — ДО middleware: форма сама является
+  // точкой получения доступа (см. src/admin/login.js).
+  app.get('/login', login.loginPage);
+  app.get('/login.js', login.loginScript);
+  app.post('/api/login', express.json({ limit: '16kb' }), login.loginApi);
+  app.post('/api/logout', login.logoutApi);
   app.use(auth.middleware);
   // Лимит согласован с редактором файлов (EDIT_MAX_BYTES = 2 МБ в admin/routes.js):
   // при 1mb запрос на 1.5 МБ падал с HTML-страницей Express вместо JSON панели.
