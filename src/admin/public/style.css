@@ -626,6 +626,111 @@ label.checkbox input { width: auto; }
 .progress-bar { height: 100%; width: 0; background: var(--primary); transition: width .2s; }
 .progress.hidden { display: none; }
 
+/* ---------- Степперы порогов (настройки оповещений) ---------- */
+
+.stepper-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 640px) { .stepper-grid { grid-template-columns: 1fr; } }
+
+.stepper-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px 16px;
+}
+[data-theme="light"] .stepper-card { background: #fff; }
+
+.stepper-label { font-size: 12.5px; color: var(--text-dim); }
+
+.stepper {
+  display: inline-flex;
+  align-items: stretch;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-card);
+}
+[data-theme="light"] .stepper { background: #fff; }
+
+.stepper input {
+  width: 56px;
+  text-align: center;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 6px 4px;
+  /* Свои кнопки ± вместо штатных стрелочек number-инпута. */
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+.stepper input::-webkit-outer-spin-button,
+.stepper input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.stepper input:focus { outline: none; }
+.stepper input::-webkit-selection { background: var(--primary); color: #fff; }
+
+.stepper-btn {
+  width: 36px;
+  border: none;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.stepper-btn:hover:not(:disabled) { background: var(--primary); color: #fff; }
+.stepper-btn:disabled { opacity: .35; cursor: not-allowed; }
+
+/* input. (а не просто класс): специфичность должна перебить
+   [data-theme="light"] input { background: #fff } из секции полей. */
+input.stepper-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 6px;
+  border: none;
+  border-radius: 4px;
+  margin-top: 16px;
+  outline: none;
+  cursor: pointer;
+  padding: 0;
+  /* Заполненная дорожка: доля заливки ставится из JS через --fill. */
+  background: linear-gradient(to right,
+    var(--primary) 0%, var(--primary) var(--fill, 80%),
+    var(--border) var(--fill, 80%), var(--border) 100%);
+}
+.stepper-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  border: 2px solid var(--primary);
+  box-shadow: var(--shadow);
+  transition: transform .12s;
+}
+.stepper-slider::-webkit-slider-thumb:hover { transform: scale(1.15); }
+.stepper-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  border: 2px solid var(--primary);
+  box-shadow: var(--shadow);
+}
+.stepper-slider:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 4px;
+}
+
 /* ---------- Пользователи ---------- */
 
 .users-table { width: 100%; border-collapse: collapse; font-size: 13px; }

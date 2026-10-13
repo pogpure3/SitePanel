@@ -1361,6 +1361,48 @@ function patchDashboard(data) {
 
 /* ---------- Настройки ---------- */
 
+/** Современный контрол порога: степпер (− значение +) + слайдер с заполненной дорожкой. */
+function stepperHtml(name, value, label) {
+  const pct = Math.round(((Number(value) || 1) - 1) / 98 * 100);
+  return `
+    <div class="stepper-card">
+      <div class="stepper-label">${esc(label)}</div>
+      <div class="stepper" data-stepper>
+        <button type="button" class="stepper-btn" data-step="-1" aria-label="Уменьшить: ${esc(label)}">−</button>
+        <input type="number" min="1" max="99" name="${name}" value="${Number(value) || 1}" inputmode="numeric" aria-label="${esc(label)}">
+        <button type="button" class="stepper-btn" data-step="1" aria-label="Увеличить: ${esc(label)}">+</button>
+      </div>
+      <input type="range" class="stepper-slider" min="1" max="99" value="${Number(value) || 1}"
+        style="--fill:${pct}%" data-slider-for="${name}" aria-label="${esc(label)} — ползунок">
+    </div>`;
+}
+
+/** Связывает степпер и слайдер: кнопки ±, ручной ввод и ползунок меняют одно значение. */
+function wireSteppers() {
+  app.querySelectorAll('[data-stepper]').forEach((st) => {
+    const input = st.querySelector('input[type="number"]');
+    const slider = app.querySelector(`[data-slider-for="${input.name}"]`);
+    const minus = st.querySelector('[data-step="-1"]');
+    const plus = st.querySelector('[data-step="1"]');
+    const clamp = (v) => Math.min(99, Math.max(1, Math.round(Number(v) || 1)));
+    const sync = (raw) => {
+      const v = clamp(raw);
+      input.value = v;
+      if (slider) {
+        slider.value = v;
+        slider.style.setProperty('--fill', Math.round((v - 1) / 98 * 100) + '%');
+      }
+      if (minus) minus.disabled = v <= 1;
+      if (plus) plus.disabled = v >= 99;
+    };
+    if (minus) minus.addEventListener('click', () => sync(Number(input.value) - 1));
+    if (plus) plus.addEventListener('click', () => sync(Number(input.value) + 1));
+    input.addEventListener('change', () => sync(input.value));
+    if (slider) slider.addEventListener('input', () => sync(slider.value));
+    sync(input.value);
+  });
+}
+
 function renderSettings(settings, system) {
   stopLogTimer();
   document.title = 'Настройки — SitePanel';
@@ -1395,15 +1437,9 @@ function renderSettings(settings, system) {
             Chat ID
             <input type="text" name="chatId" value="${esc(a.telegramChatId || '')}" placeholder="-1001234567890 или 123456789" style="margin-top:6px" autocomplete="off">
           </label>
-          <div style="display:flex;gap:12px">
-            <label style="flex:1;color:var(--text-dim);font-size:13px">
-              Порог диска, %
-              <input type="number" min="1" max="99" name="disk" value="${a.diskThreshold || 80}" style="margin-top:6px">
-            </label>
-            <label style="flex:1;color:var(--text-dim);font-size:13px">
-              Порог памяти, %
-              <input type="number" min="1" max="99" name="mem" value="${a.memThreshold || 80}" style="margin-top:6px">
-            </label>
+          <div class="stepper-grid">
+            ${stepperHtml('disk', a.diskThreshold || 80, 'Порог диска, %')}
+            ${stepperHtml('mem', a.memThreshold || 80, 'Порог памяти, %')}
           </div>
           <div class="actions-row">
             <button class="btn btn-primary btn-sm" type="submit">Сохранить</button>
@@ -1470,6 +1506,8 @@ function renderSettings(settings, system) {
       toast(err.message, 'error');
     }
   });
+
+  wireSteppers();
 }
 
 /* ---------- Пользователи ---------- */
