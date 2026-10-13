@@ -22,20 +22,45 @@ const router = express.Router();
 router.use(auth.middleware);
 
 /**
- * Защита от CSRF. HTTP Basic браузер подставляет автоматически, поэтому
+ * Защита от CSRF (A-03). HTTP Basic браузер подставляет автоматически, поэтому
  * сторонняя страница может отправить POST на панель (simple request) — ответ
- * она не прочитает, но действие выполнится. Требуем заголовок X-Requested-With:
- * произвольные заголовки вынуждают preflight, а CORS в панели не разрешён,
- * значит кросс-доменный запрос до обработчика не дойдёт.
+ * она не прочитает, но действие выполнится. Барьеров два:
+ *  1) X-Requested-With: произвольный заголовок вынуждает preflight, а CORS
+ *     в панели не разрешён — кросс-доменный fetch до обработчика не дойдёт;
+ *  2) Origin/Referer, если браузер их прислал, обязаны совпадать с хостом
+ *     панели; Sec-Fetch-Site: cross-site отклоняется всегда.
+ * Запросы без Origin/Referer (curl, тесты, серверные клиенты) проходят по
+ * заголовку X-Requested-With — браузерный кросс-сайтовый POST Origin пришлёт.
  */
 const CSRF_HEADER = 'x-requested-with';
 
+function sameHost(value, host) {
+  try {
+    return new URL(String(value)).host.toLowerCase() === String(host || '').toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
 function csrfGuard(req, res, next) {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
-  if (req.headers[CSRF_HEADER] === 'XMLHttpRequest') return next();
-  return res.status(403).json({
-    error: 'Запрос отклонён: отсутствует заголовок X-Requested-With (защита от CSRF).',
-  });
+  if (req.headers[CSRF_HEADER] !== 'XMLHttpRequest') {
+    return res.status(403).json({
+      error: 'Запрос отклонён: отсутствует заголовок X-Requested-With (защита от CSRF).',
+    });
+  }
+  const origin = req.headers.origin;
+  if (origin !== undefined && !sameHost(origin, req.headers.host)) {
+    return res.status(403).json({ error: 'Запрос отклонён: Origin не совпадает с адресом панели (защита от CSRF).' });
+  }
+  const referer = req.headers.referer;
+  if (referer !== undefined && !sameHost(referer, req.headers.host)) {
+    return res.status(403).json({ error: 'Запрос отклонён: Referer не совпадает с адресом панели (защита от CSRF).' });
+  }
+  if (String(req.headers['sec-fetch-site'] || '').toLowerCase() === 'cross-site') {
+    return res.status(403).json({ error: 'Запрос отклонён: Sec-Fetch-Site: cross-site (защита от CSRF).' });
+  }
+  return next();
 }
 router.use(csrfGuard);
 
@@ -306,9 +331,22 @@ router.post('/sites/:id/ssl/selfsigned', wrap(async (req, res) => {
 
 router.post('/sites/:id/ssl/issue', wrap(async (req, res) => {
   const site = findSite(req);
+  // Домены выпуска валидируются тем же normalizeDomain, что и привязка доменов
+  // (H-19): раньше произвольные строки попадали в сохраняемый site.ssl.domains,
+  // в CSR и в продление, минуя все проверки.
+  let domains = req.body.domains;
+  if (domains !== undefined) {
+    if (!Array.isArray(domains)) {
+      return res.status(400).json({ error: 'domains должен быть массивом' });
+    }
+    domains = domains.map((d) => store.normalizeDomain(d));
+    if (domains.some((d) => !d)) {
+      return res.status(400).json({ error: 'Список domains содержит некорректное доменное имя' });
+    }
+  }
   try {
     await acme.issueCertificate(site, {
-      domains: req.body.domains,
+      domains,
       email: req.body.email,
       staging: req.body.staging,
     });
@@ -340,7 +378,10 @@ router.get('/settings', wrap(async (_req, res) => {
     leStaging: !!store.state.settings.leStaging,
     alerts: {
       enabled: a.enabled !== false,
-      telegramToken: a.telegramToken || '',
+      // Токен не покидает сервер (A-02): любая XSS в оболочке забирала его из DOM,
+      // а значение приезжало в каждый ответ /api/settings.
+      telegramTokenSet: !!a.telegramToken,
+      telegramTokenHint: a.telegramToken ? '***' + String(a.telegramToken).slice(-4) : '',
       telegramChatId: a.telegramChatId || '',
       diskThreshold: a.diskThreshold || 80,
       memThreshold: a.memThreshold || 80,
@@ -360,7 +401,15 @@ router.put('/settings', wrap(async (req, res) => {
     const a = store.state.settings.alerts;
     const inc = req.body.alerts;
     if (inc.enabled !== undefined) a.enabled = !!inc.enabled;
-    if (inc.telegramToken !== undefined) a.telegramToken = String(inc.telegramToken).trim();
+    // A-02: токен меняется только новым значением. Пустая строка или маска вида
+    // «***1234» (что вернёт GET) означают «оставить прежний» — иначе сохранение
+    // настроек из формы, не трогавшей токен, стирало бы его. Явно стереть можно
+    // полем telegramTokenReset: true.
+    if (inc.telegramTokenReset === true) a.telegramToken = '';
+    else if (inc.telegramToken !== undefined) {
+      const t = String(inc.telegramToken).trim();
+      if (t && !/^\*\*\*/.test(t)) a.telegramToken = t;
+    }
     if (inc.telegramChatId !== undefined) a.telegramChatId = String(inc.telegramChatId).trim();
     for (const key of ['diskThreshold', 'memThreshold']) {
       if (inc[key] === undefined) continue;
@@ -399,6 +448,9 @@ router.post('/password', wrap(async (req, res) => {
   }
   try {
     const result = auth.changePassword(user, password);
+    // Смена пароля — событие доступа: без записи в журнале подмена учётных данных
+    // не оставляла бы следа (A-05). Пароль не логируется.
+    console.log(`[auth] пароль изменён (user: ${result.user}, ip: ${req.socket.remoteAddress})`);
     res.json({ ok: true, user: result.user });
   } catch (err) {
     const status = err.code === 'INVALID_USER' || err.code === 'INVALID_PASSWORD' ? 400 : 500;
@@ -437,12 +489,24 @@ router.get('/system', wrap(async (_req, res) => {
 const EDIT_MAX_BYTES = 2 * 1024 * 1024; // редактирование текстовых файлов до 2 МБ
 
 // Разрешаем пути только внутри каталога сайта (защита от ../ и абсолютных путей).
+// Лексической проверки мало: симлинк внутри каталога может вести наружу, и через
+// чтение или PUT файла утекал .env соседа — поэтому вторая, «реальная» проверка
+// через realpath (H-03).
+const { realInside } = require('../httpserver');
+
 function safePath(site, rel, { mustExist = false } = {}) {
   const root = path.resolve(manager.siteDir(site));
   const clean = String(rel || '').replace(/\\/g, '/').replace(/^\/+/, '');
   const target = path.resolve(root, clean);
   if (target !== root && !target.startsWith(root + path.sep)) {
     const err = new Error('Путь вне каталога сайта');
+    err.status = 400;
+    throw err;
+  }
+  // realInside разворачивает симлинки; для ещё не существующего файла смотрит
+  // ближайшего существующего родителя (создание нового файла валидно).
+  if (!realInside(root, target)) {
+    const err = new Error('Путь вне каталога сайта (симлинк)');
     err.status = 400;
     throw err;
   }

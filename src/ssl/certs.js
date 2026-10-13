@@ -35,7 +35,11 @@ function ensureDefaultCert() {
   const dir = defaultDir();
   const keyFile = path.join(dir, 'privkey.pem');
   const crtFile = path.join(dir, 'fullchain.pem');
-  if (fs.existsSync(keyFile)) return;
+  // Проверять ОБА файла (H-17): раньше достаточно было ключа, и после пропажи
+  // (недописанный каталог, ручная чистка) ensureDefaultCert не перегенерировал,
+  // а defaultCertFiles() при старте падал ENOENT — ронялся весь процесс панели
+  // вместе с размещёнными сайтами.
+  if (fs.existsSync(keyFile) && fs.existsSync(crtFile)) return;
   secure.mkdirPrivate(dir);
   const pems = selfsigned.generate([{ name: 'commonName', value: 'sitepanel.local' }], {
     days: 825,

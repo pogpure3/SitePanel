@@ -909,8 +909,11 @@ function extractZip(zipPath, targetDir) {
     writtenBytes += data.length;
     fs.writeFileSync(dest, data);
     // Права из архива: без них теряется executable-бит (./scripts/start.sh).
+    // Маска 0o755, а не 0o777 (H-20): архив может попросить 0777/с setuid —
+    // исполняемый и записываемый для всех файл в каталоге сайта это зацепка
+    // для локальной эскалации прав. Запись группе/остальным и спец-биты не даём.
     if (mode !== null && process.platform !== 'win32') {
-      try { fs.chmodSync(dest, mode & 0o777); } catch { /* не критично */ }
+      try { fs.chmodSync(dest, mode & 0o755); } catch { /* не критично */ }
     }
     files++;
   }

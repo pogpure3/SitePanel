@@ -12,8 +12,26 @@ const certs = require('./certs');
 const manager = require('../sites/manager');
 const secure = require('../securefile');
 
-// token -> keyAuthorization (живёт в памяти, нужен только на время заказа)
+// token -> keyAuthorization (живёт в памяти, нужен только на время заказа).
+// Ключ — «домен|токен»: раньше карта была общей, и завершение выпуска для сайта A
+// в finally стирало токены сайта B — параллельный выпуск падал по таймауту (H-04).
 const pendingChallenges = new Map();
+
+// Выпуск сертификата — сетевая операция на минуты; два выпуска для одного сайта
+// одновременно (ручной + цикл продления) писали два CSR в одни файлы (H-18).
+const MIN_ISSUE_INTERVAL_MS = 60 * 1000;
+
+function challengeKey(domain, token) {
+  return String(domain).toLowerCase() + '|' + String(token);
+}
+
+function setChallenge(domain, token, keyAuthorization) {
+  pendingChallenges.set(challengeKey(domain, token), keyAuthorization);
+}
+
+function removeChallenge(domain, token) {
+  pendingChallenges.delete(challengeKey(domain, token));
+}
 
 function directoryUrl(staging) {
   return staging ? acme.directory.letsencrypt.staging : acme.directory.letsencrypt.production;
@@ -39,12 +57,35 @@ async function loadAccountKey(staging) {
  * @param {object} opts { domains: string[], email: string, staging: boolean }
  */
 async function issueCertificate(site, opts = {}) {
+  // Выпуск — долгая операция; лок сайта не даёт ручному выпуску наложиться на
+  // цикл продления того же сайта (два CSR, две записи в одни файлы) (H-18).
+  return manager.withSiteLock(site.id, () => issueCertificateLocked(site, opts));
+}
+
+async function issueCertificateLocked(site, opts = {}) {
   const domains = (opts.domains && opts.domains.length ? opts.domains : site.domains)
     .filter((d) => !d.startsWith('*')); // wildcard через HTTP-01 невозможен
   if (!domains.length) throw new Error('Нет доменов без wildcard для выпуска сертификата');
 
+  // Повторный выпуск раньше чем через минуту расходовал лимит дубликатов
+  // Let's Encrypt (5/нед) на нечаянные повторные клики (H-18).
+  if (site.ssl && site.ssl.issuedAt && Date.now() - site.ssl.issuedAt < MIN_ISSUE_INTERVAL_MS) {
+    throw new Error('Сертификат выпускался меньше минуты назад — повторите позже');
+  }
+
   const email = opts.email || store.state.settings.leEmail;
-  const staging = opts.staging !== undefined ? opts.staging : !!store.state.settings.leStaging;
+  // Целевой каталог (staging/production) для УЖЕ выпущенного сайта берётся из
+  // его записи: иначе переключение глобальной настройки молча переводило
+  // существующий сайт между staging и production при продлении (H-18).
+  const staging = opts.staging !== undefined
+    ? !!opts.staging
+    : site.ssl && site.ssl.staging !== undefined && site.ssl.provider === 'letsencrypt'
+      ? !!site.ssl.staging
+      : !!store.state.settings.leStaging;
+
+  // Токены, выпущенные ЭТИМ заказом: finally раньше стирал ВСЕ токены карты,
+  // роняя параллельный выпуск для другого сайта (H-04).
+  const ownTokens = new Set();
 
   site.ssl = site.ssl || {};
   site.ssl.provider = 'letsencrypt';
@@ -76,12 +117,14 @@ async function issueCertificate(site, opts = {}) {
       skipChallengeVerification: true, // проверку делает сам Let's Encrypt
       challengeCreateFn: async (_authz, challenge, keyAuthorization) => {
         if (challenge.type === 'http-01') {
-          manager.appendLog(site, `[ssl] challenge: подготовлен токен ${challenge.token} для ${_authz.identifier.value}`);
-          pendingChallenges.set(challenge.token, keyAuthorization);
+          const domain = _authz.identifier.value;
+          manager.appendLog(site, `[ssl] challenge: подготовлен токен ${challenge.token} для ${domain}`);
+          setChallenge(domain, challenge.token, keyAuthorization);
+          ownTokens.add(challengeKey(domain, challenge.token));
         }
       },
       challengeRemoveFn: async (_authz, challenge) => {
-        if (challenge.type === 'http-01') pendingChallenges.delete(challenge.token);
+        if (challenge.type === 'http-01') removeChallenge(_authz.identifier.value, challenge.token);
       },
     });
 
@@ -104,35 +147,65 @@ async function issueCertificate(site, opts = {}) {
     manager.appendLog(site, `[ssl] ОШИБКА выпуска сертификата: ${site.ssl.error}`);
     throw err;
   } finally {
-    for (const [token] of pendingChallenges) pendingChallenges.delete(token);
+    // Удаляем только свои токены: общая очистка карты теряла challenge
+    // параллельного выпуска другого сайта (H-04).
+    for (const key of ownTokens) pendingChallenges.delete(key);
   }
 }
 
-function getChallenge(token) {
-  return pendingChallenges.get(token) || null;
+function getChallenge(domain, token) {
+  if (!domain) return null;
+  return pendingChallenges.get(challengeKey(domain, token)) || null;
 }
 
 /**
- * Автопродление: раз в сутки проверяем сертификаты, истекающие в течение
- * config.leRenewDays дней, и перевыпускаем их.
+ * Автопродление: проверяем сертификаты, истекающие в течение config.leRenewDays
+ * дней, и перевыпускаем их — по ОДНОМУ сайту за тик (H-04): раньше все сайты
+ * продлевались одновременно, складывая нагрузку на Let's Encrypt и на панель.
+ * Интервал с джиттером, чтобы продления не выстраивались в регулярный шторм.
  */
-function startRenewalLoop() {
-  const check = async () => {
-    for (const site of store.state.sites) {
-      if (!site.ssl || site.ssl.provider !== 'letsencrypt' || site.ssl.status !== 'active') continue;
-      const exp = site.ssl.expiresAt || 0;
-      if (exp && exp - Date.now() < config.leRenewDays * 86400000) {
-        manager.appendLog(site, '[ssl] автоматическое продление сертификата...');
-        try {
-          await issueCertificate(site, { domains: site.ssl.domains, staging: site.ssl.staging });
-        } catch (err) {
-          console.error(`[ssl] продление не удалось для ${site.name}:`, err.message);
-        }
-      }
-    }
-  };
-  setInterval(check, 6 * 3600000); // 4 раза в сутки
-  setTimeout(check, 30000); // и вскоре после старта
+let renewalTimer = null;
+
+function scheduleRenewal(delayMs) {
+  if (renewalTimer) clearTimeout(renewalTimer);
+  renewalTimer = setTimeout(runRenewalTick, delayMs);
+  renewalTimer.unref();
 }
 
-module.exports = { issueCertificate, getChallenge, startRenewalLoop };
+async function runRenewalTick() {
+  let due = null;
+  for (const site of store.state.sites) {
+    if (!site.ssl || site.ssl.provider !== 'letsencrypt' || site.ssl.status !== 'active') continue;
+    const exp = site.ssl.expiresAt || 0;
+    if (exp && exp - Date.now() < config.leRenewDays * 86400000) {
+      // Первый по очереди истекающий; на следующем тике возьмётся следующий.
+      due = site;
+      break;
+    }
+  }
+  if (due) {
+    manager.appendLog(due, '[ssl] автоматическое продление сертификата...');
+    try {
+      await issueCertificate(due, { domains: due.ssl.domains, staging: due.ssl.staging });
+    } catch (err) {
+      // Ошибка продления — в лог сайта (issueCertificate пишет туда же) и в журнал
+      // панели; site.ssl.error хранит текст для карточки сайта (H-04).
+      console.error(`[ssl] продление не удалось для ${due.name}:`, err.message);
+    }
+    // Есть ещё кандидаты — следующий тик скоро; нет — обычный интервал с джиттером.
+    const stillDue = store.state.sites.some((s) => {
+      if (!s.ssl || s.ssl.provider !== 'letsencrypt' || s.ssl.status !== 'active') return false;
+      const exp = s.ssl.expiresAt || 0;
+      return exp && exp - Date.now() < config.leRenewDays * 86400000;
+    });
+    scheduleRenewal(stillDue ? 5 * 60000 : 6 * 3600000 + Math.floor(Math.random() * 30 * 60000));
+    return;
+  }
+  scheduleRenewal(6 * 3600000 + Math.floor(Math.random() * 30 * 60000));
+}
+
+function startRenewalLoop() {
+  scheduleRenewal(30000 + Math.floor(Math.random() * 30000)); // вскоре после старта, с разбросом
+}
+
+module.exports = { issueCertificate, getChallenge, setChallenge, removeChallenge, startRenewalLoop };

@@ -66,6 +66,17 @@ function fmtGb(n) {
   return (n / 1073741824).toFixed(1);
 }
 
+/**
+ * Токен бота не должен попадать в журналы (A-02): часть текстов ошибок может
+ * содержать URL запроса, а в нём токен стоит в пути.
+ */
+function redactToken(text) {
+  const a = store.state.settings.alerts;
+  const token = a && a.telegramToken;
+  const s = String(text);
+  return token ? s.split(token).join('***').split('bot' + token).join('bot***') : s;
+}
+
 async function send(text) {
   const a = store.state.settings.alerts;
   if (!a || !a.telegramToken || !a.telegramChatId) return false;
@@ -78,14 +89,14 @@ async function send(text) {
         body: JSON.stringify({ chat_id: a.telegramChatId, text }),
       });
       if (res.ok) return true;
-      console.error('[alerts] telegram error', res.status, (await res.text()).slice(0, 200));
+      console.error('[alerts] telegram error', res.status, redactToken((await res.text()).slice(0, 200)));
       return false; // внятная ошибка API — ретраить бессмысленно
     } catch (err) {
       if (attempt === 0) {
         await new Promise((r) => setTimeout(r, 3000));
         continue;
       }
-      console.error('[alerts] send failed:', err.message);
+      console.error('[alerts] send failed:', redactToken(err.message));
       return false;
     }
   }

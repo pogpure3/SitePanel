@@ -1003,9 +1003,10 @@ function renderSettings(settings, system) {
         <form id="alertForm">
           <label class="checkbox" style="margin-bottom:10px"><input type="checkbox" name="enabled" ${a.enabled !== false ? 'checked' : ''}> Включить оповещения</label>
           <label style="display:block;color:var(--text-dim);font-size:13px;margin-bottom:10px">
-            Bot token
-            <input type="text" name="token" value="${esc(a.telegramToken || '')}" placeholder="123456789:AA..." style="margin-top:6px" autocomplete="off">
+            Bot token ${a.telegramTokenSet ? `<span style="color:var(--text-dim)">(сохранён, ${esc(a.telegramTokenHint || '***')})</span>` : ''}
+            <input type="password" name="token" value="" placeholder="${a.telegramTokenSet ? 'введите новый токен, чтобы заменить' : '123456789:AA...'}" style="margin-top:6px" autocomplete="new-password">
           </label>
+          ${a.telegramTokenSet ? '<label class="checkbox" style="margin-bottom:10px"><input type="checkbox" name="tokenReset"> Удалить сохранённый токен</label>' : ''}
           <label style="display:block;color:var(--text-dim);font-size:13px;margin-bottom:10px">
             Chat ID
             <input type="text" name="chatId" value="${esc(a.telegramChatId || '')}" placeholder="-1001234567890 или 123456789" style="margin-top:6px" autocomplete="off">
@@ -1073,15 +1074,18 @@ function renderSettings(settings, system) {
   document.getElementById('alertForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
-      await api('PUT', '/api/settings', {
-        alerts: {
-          enabled: e.target.enabled.checked,
-          telegramToken: e.target.token.value.trim(),
-          telegramChatId: e.target.chatId.value.trim(),
-          diskThreshold: e.target.disk.value,
-          memThreshold: e.target.mem.value,
-        },
-      });
+      const token = e.target.token.value.trim();
+      const alerts = {
+        enabled: e.target.enabled.checked,
+        telegramChatId: e.target.chatId.value.trim(),
+        diskThreshold: e.target.disk.value,
+        memThreshold: e.target.mem.value,
+      };
+      // Токен отправляется только если введён новый: поле пустое по умолчанию,
+      // и сохранение настроек не должно стирать сохранённый токен (A-02).
+      if (token) alerts.telegramToken = token;
+      if (e.target.tokenReset && e.target.tokenReset.checked) alerts.telegramTokenReset = true;
+      await api('PUT', '/api/settings', { alerts });
       toast('Оповещения сохранены', 'success');
     } catch (err) {
       toast(err.message, 'error');

@@ -62,6 +62,11 @@ const config = {
   // Сколько ждать, пока приложение сайта откроет порт после старта (P-03).
   appListenWaitMs: posInt(process.env.PANEL_APP_LISTEN_WAIT_MS, 10000, 500, 120000),
 
+  // Кому верить заголовкам X-Forwarded-* (H-07). По умолчанию — только loopback
+  // (nginx на той же машине). PANEL_TRUST_PROXY='1.2.3.4,5.6.7.8' — явный список
+  // адресов фронт-прокси (заменяет умолчание); '*' — доверять всем (небезопасно).
+  trustProxy: parseTrustProxy(process.env.PANEL_TRUST_PROXY),
+
   // Логи сайтов: одна ротация на старте + чтение всего файла в память были
   // главным путём к OOM одним запросом (P-01, P-02, P-23).
   logMaxBytes: posInt(process.env.PANEL_LOG_MAX_BYTES, 4 * 1024 * 1024, 64 * 1024, 1024 * 1024 * 1024),
@@ -139,6 +144,20 @@ function posInt(v, dflt, min, max) {
 function bool(v, dflt) {
   if (v === undefined) return dflt;
   return v === '1' || v === 'true' || v === 'yes';
+}
+
+/**
+ * Список доверенных фронт-прокси для X-Forwarded-* (H-07).
+ * undefined/пусто → [] (доверяем только loopback, см. httpserver.trustedForwarder);
+ * '*' или 'all' → 'all' (доверять всем — осознанное решение оператора);
+ * иначе — массив адресов, разделённых запятой. Мусор отбрасывается с логом.
+ */
+function parseTrustProxy(v) {
+  if (v === undefined || v === '') return [];
+  const s = String(v).trim().toLowerCase();
+  if (s === '*' || s === 'all') return 'all';
+  const list = s.split(',').map((p) => p.trim()).filter(Boolean);
+  return list.length ? list : [];
 }
 
 function ensureDirs() {
