@@ -573,12 +573,38 @@ function healthStripHtml(history) {
 function sslInfoHtml(site) {
   const parts = [`<p>${sslBadge(site.ssl)}</p>`];
   if (site.ssl && site.ssl.error) parts.push(`<div class="warn">${esc(site.ssl.error)}</div>`);
-  if (site.ssl && site.ssl.status === 'active') {
-    parts.push(`<dl class="kv">
+  if (!site.ssl || site.ssl.status !== 'active') return parts.join('');
+
+  parts.push(`<dl class="kv">
       <dt>Провайдер</dt><dd>${site.ssl.provider === 'letsencrypt' ? "Let's Encrypt" : 'Self-signed'}</dd>
       <dt>Выдан</dt><dd>${fmtDate(site.ssl.issuedAt)}</dd>
       <dt>Истекает</dt><dd>${fmtDate(site.ssl.expiresAt)}</dd>
     </dl>`);
+
+  // Покрытие привязанных доменов сертификатом. Домены попадают в сертификат
+  // только в момент выпуска: привязка нового домена сама по себе его туда
+  // не добавляет, и без этой таблицы расхождение было невидимо.
+  const sslDomains = Array.isArray(site.ssl.domains) ? site.ssl.domains : [];
+  const bound = Array.isArray(site.domains) ? site.domains : [];
+  const notCovered = bound.filter((d) => !sslDomains.includes(d));
+  const stale = sslDomains.filter((d) => !bound.includes(d));
+
+  parts.push('<p class="hint" style="margin:10px 0 6px">Покрытие привязанных доменов:</p>');
+  parts.push('<div class="domain-list">' + (bound.map((d) => {
+    const covered = sslDomains.includes(d);
+    const badge = covered
+      ? '<span class="badge ssl-ok" title="Домен входит в сертификат">покрыт</span>'
+      : d.startsWith('*.')
+        ? '<span class="badge" title="Wildcard не покрывается выпуском Let\'s Encrypt по HTTP-01 (нужен DNS-01)">без сертификата</span>'
+        : '<span class="badge ssl-pending" title="Домен привязан, но его нет в сертификате">не покрыт</span>';
+    return `<div class="domain-row"><span>${esc(d)}</span>${badge}</div>`;
+  }).join('') || '<p class="hint">Нет привязанных доменов.</p>') + '</div>');
+
+  if (notCovered.some((d) => !d.startsWith('*.'))) {
+    parts.push('<div class="warn">Есть привязанные домены вне сертификата — перевыпустите сертификат («Выпустить Let\'s Encrypt»), чтобы добавить их.</div>');
+  }
+  if (stale.length) {
+    parts.push(`<p class="hint">В сертификате есть домены, которые уже не привязаны к сайту: ${esc(stale.join(', '))}.</p>`);
   }
   return parts.join('');
 }

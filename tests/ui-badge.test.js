@@ -127,6 +127,50 @@ test('statusLabelFull: показывает причину состояния', 
   assert.equal(plain, 'Работает');
 });
 
+/* ---------- sslInfoHtml: покрытие привязанных доменов сертификатом ---------- */
+
+test('sslInfoHtml: показывает, какие привязанные домены не покрыты сертификатом', () => {
+  const site = {
+    domains: ['a.test', 'b.test'],
+    ssl: { status: 'active', provider: 'letsencrypt', domains: ['a.test'], issuedAt: 1, expiresAt: 2 },
+  };
+  const html = evalInApp(`sslInfoHtml(${JSON.stringify(site)})`);
+  assert.match(html, /Покрытие привязанных доменов/);
+  assert.match(html, /a\.test/);
+  assert.match(html, /покрыт/);
+  assert.match(html, /b\.test/, 'непокрытый домен не показан');
+  assert.match(html, /не покрыт/, 'нет пометки «не покрыт»');
+  assert.match(html, /перевыпустите/i, 'нет подсказки о перевыпуске');
+});
+
+test('sslInfoHtml: домены сертификата, отвязанные от сайта, помечаются отдельно', () => {
+  const site = {
+    domains: ['a.test'],
+    ssl: { status: 'active', provider: 'letsencrypt', domains: ['a.test', 'old.test'], issuedAt: 1, expiresAt: 2 },
+  };
+  const html = evalInApp(`sslInfoHtml(${JSON.stringify(site)})`);
+  assert.match(html, /old\.test/, 'лишний домен сертификата не показан');
+  assert.match(html, /уже не привязаны/);
+});
+
+test('sslInfoHtml: wildcard помечается «без сертификата» (HTTP-01 невозможен)', () => {
+  const site = {
+    domains: ['a.test', '*.w.test'],
+    ssl: { status: 'active', provider: 'letsencrypt', domains: ['a.test'], issuedAt: 1, expiresAt: 2 },
+  };
+  const html = evalInApp(`sslInfoHtml(${JSON.stringify(site)})`);
+  assert.match(html, /\*\.w\.test/);
+  assert.match(html, /без сертификата/);
+  assert.doesNotMatch(html, /перевыпустите/i, 'wildcard не должен требовать перевыпуска LE');
+});
+
+test('sslInfoHtml: без активного сертификата списка покрытия нет', () => {
+  const site = { domains: ['a.test'], ssl: { status: 'none' } };
+  const html = evalInApp(`sslInfoHtml(${JSON.stringify(site)})`);
+  assert.doesNotMatch(html, /Покрытие привязанных доменов/);
+  assert.match(html, /Без SSL/);
+});
+
 test('модалки: openModal/closeModal меняют класс и возвращают фокус', () => {
   const trigger = stubElement('trigger');
   const button = stubElement('okBtn');
