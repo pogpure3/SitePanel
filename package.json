@@ -9,7 +9,7 @@
     "test": "node tests/run.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "dependencies": {
     "acme-client": "^5.0.0",

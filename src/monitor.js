@@ -3,6 +3,7 @@
 // Мониторинг: периодические health-check'и, потребление памяти процессов.
 
 const { execFile } = require('child_process');
+const { config } = require('./config');
 const store = require('./store');
 const manager = require('./sites/manager');
 const alerts = require('./alerts');
@@ -12,6 +13,35 @@ const FAILS_TO_ALERT = 2;
 
 const history = new Map(); // siteId -> [{t, ok, ms, code}] (в памяти, до 100 точек)
 const HISTORY_MAX = 100;
+
+// Телеметрия (health/fails) живёт ТОЛЬКО здесь (M-02): раньше она писалась в
+// записи сайта, и db.json целиком переписывался на диске каждые 30 с даже без
+// изменений — рост файла и износ диска ради данных, которые не обязаны
+// переживать рестарт.
+const telemetry = new Map(); // siteId -> { health, fails }
+
+function telemetryFor(siteId) {
+  let t = telemetry.get(siteId);
+  if (!t) {
+    t = { health: { status: 'unknown' }, fails: 0 };
+    telemetry.set(siteId, t);
+  }
+  return t;
+}
+
+/** health из телеметрии — для API (вместо поля записи сайта). */
+function healthFor(siteId) {
+  const t = telemetry.get(siteId);
+  return (t && t.health) || { status: 'unknown' };
+}
+
+/** Полная зачистка памяти по удалённому сайту (M-03): без этого ~100 точек
+ *  истории и телеметрия оставались в Map навсегда. */
+function forgetSite(siteId) {
+  history.delete(siteId);
+  telemetry.delete(siteId);
+  statsCache.delete(siteId);
+}
 
 function pushHistory(siteId, point) {
   let arr = history.get(siteId);
@@ -43,7 +73,7 @@ async function checkSite(site) {
     point = { t: Date.now(), ok: false, ms: 0, code: 0 };
   }
 
-  site.health = {
+  telemetryFor(site.id).health = {
     status: point.ok ? 'up' : 'down',
     lastCheck: point.t,
     lastMs: point.ms,
@@ -51,21 +81,27 @@ async function checkSite(site) {
   };
   if (site.status === 'running' && !point.ok && site.type === 'node' && !manager.isRunning(site)) {
     // Атомарная замена статуса: тик монитора стартовал ДО деплоя и видит запись
-    // в состоянии, которого уже нет. Прямая запись перетирала 'starting'/'stopped',
+    // в состоянии, которой уже нет. Прямая запись перетирала 'starting'/'stopped',
     // выставленные деплоем, и роняла сайт в 'crashed' посреди работы (P-26).
-    // setStatusIf применит переход, только если статус всё ещё 'running'.
+    // setStatusIf применит переход, только если статус всё ещё 'running';
+    // store.save() вызывается внутри — здесь он больше не нужен (M-02).
     manager.setStatusIf(site, 'running', 'crashed');
   }
   // Самолечение: процесс жив, а статус завис в crashed (например, после сбоя панели).
   if (site.status === 'crashed' && manager.isRunning(site)) {
     manager.setStatusIf(site, 'crashed', 'running');
   }
-  store.save();
   return point;
 }
 
-function start() {
-  const tick = async () => {
+// Guard наслоения тиков (M-02): при >=7 мёртвых сайтах тик длился дольше
+// интервала, накладывался на следующий и умножал работу.
+let tickRunning = false;
+
+async function tick() {
+  if (tickRunning) return;
+  tickRunning = true;
+  try {
     for (const site of store.state.sites) {
       if (site.status === 'running' || site.status === 'crashed') {
         try {
@@ -80,16 +116,22 @@ function start() {
         alerts.siteSilentClear(site.id);
       }
     }
-  };
-  setInterval(tick, 30000);
+  } finally {
+    tickRunning = false;
+  }
+}
+
+function start() {
+  setInterval(tick, config.monitorTickMs);
   setTimeout(tick, 5000);
 }
 
 // Переходы для оповещений: не отвечает / восстановился.
 // Дедупликация и состояние — внутри alerts (siteState), здесь только события.
 async function evalSiteAlerts(site, point) {
+  const t = telemetryFor(site.id);
   if (site.status === 'running' && point.ok) {
-    site.fails = 0;
+    t.fails = 0;
     await alerts.siteUp(site); // no-op, если алерт не отправлялся
     return;
   }
@@ -98,8 +140,8 @@ async function evalSiteAlerts(site, point) {
     return;
   }
   // running, но health-check проваливается.
-  site.fails = (site.fails || 0) + 1;
-  if (site.fails >= FAILS_TO_ALERT) {
+  t.fails = (t.fails || 0) + 1;
+  if (t.fails >= FAILS_TO_ALERT) {
     const detail = point.error ? (point.error === 'timeout' ? 'нет ответа за 5с' : 'соединение отклонено') : `HTTP ${point.code || '?'}`;
     await alerts.siteDown(site, `не отвечает (${detail})`);
   }
@@ -127,8 +169,17 @@ function processMemoryMb(pid) {
   });
 }
 
+// Кэш статистики процессов (M-07): tasklist на Windows / чтение /proc на каждый
+// GET /api/sites при активном UI на 50 сайтах давал тысячи процессов в час.
+// Ключ по pid: после перезапуска сайта кэш не отдаёт устаревший pid.
+const statsCache = new Map(); // siteId -> { pid, at, stats }
+const STATS_TTL_MS = 5000;
+
 async function statsFor(site) {
-  if (site.type !== 'node' || !manager.isRunning(site)) return null;
+  if (site.type !== 'node' || !manager.isRunning(site)) {
+    statsCache.delete(site.id);
+    return null;
+  }
   const proc = manager.getProcessInfo(site);
   // У подхваченного после перезапуска панели процесса (external) есть только pid,
   // а child === null — прежняя проверка `proc.child.pid` падала с
@@ -136,16 +187,20 @@ async function statsFor(site) {
   if (!proc) return null;
   const pid = proc.child ? proc.child.pid : proc.pid;
   if (!pid) return null;
+  const cached = statsCache.get(site.id);
+  if (cached && cached.pid === pid && Date.now() - cached.at < STATS_TTL_MS) return cached.stats;
   const memoryMb = await processMemoryMb(pid);
-  return {
+  const stats = {
     pid,
     uptimeSec: Math.round((Date.now() - proc.startedAt) / 1000),
     memoryMb,
   };
+  statsCache.set(site.id, { pid, at: Date.now(), stats });
+  return stats;
 }
 
 function getHistory(siteId) {
   return history.get(siteId) || [];
 }
 
-module.exports = { start, checkSite, statsFor, getHistory };
+module.exports = { start, tick, checkSite, statsFor, getHistory, healthFor, forgetSite };

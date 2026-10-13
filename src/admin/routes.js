@@ -124,7 +124,8 @@ function serializeSite(site, withStats = true) {
     gitBranch: site.gitBranch || null,
     gitSubdir: site.gitSubdir || null,
     ssl: site.ssl || { status: 'none' },
-    health: site.health || { status: 'unknown' },
+    // health — телеметрия монитора из памяти, не поле записи (M-02).
+    health: monitor.healthFor(site.id),
     // Диагностика цикла перезапусков: attempts — текущий бэкофф, crashLoop — лимит исчерпан.
     restartAttempts: site.restartAttempts || 0,
     restartCount: site.restartCount || 0,
@@ -270,6 +271,8 @@ router.delete('/sites/:id', wrap(async (req, res) => {
   const site = findSite(req);
   await manager.removeSite(site);
   certs.removeCertFiles(site);
+  // История проверок и кэш статистики в памяти не должны переживать удаление (M-03).
+  monitor.forgetSite(site.id);
   store.state.sites = store.state.sites.filter((s) => s.id !== site.id);
   store.flush();
   res.json({ ok: true });
@@ -366,7 +369,7 @@ router.post('/sites/:id/ssl/disable', wrap(async (req, res) => {
 
 router.get('/sites/:id/health', wrap(async (req, res) => {
   const site = findSite(req);
-  res.json({ history: monitor.getHistory(site.id), health: site.health || null });
+  res.json({ history: monitor.getHistory(site.id), health: monitor.healthFor(site.id) });
 }));
 
 /* ---------- Настройки и система ---------- */

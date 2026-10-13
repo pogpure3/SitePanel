@@ -77,6 +77,12 @@ const config = {
 
   // Блокировка единственного экземпляра панели (SP-08).
   instanceLockFile: path.join(DATA_DIR, 'sitepanel.lock'),
+  // Состояние защёлок алертов между перезапусками (SP-22).
+  stateFile: path.join(DATA_DIR, 'state.json'),
+
+  // Период health-check тика монитора. Переменная нужна тестам (ждать 30 с
+  // нельзя) и тем, кто хочет чаще/реже; нижняя граница защищает от DDoS самого себя.
+  monitorTickMs: posInt(process.env.PANEL_MONITOR_TICK_MS, 30000, 250, 600000),
 };
 
 // Пользовательский config.json перекрывает значения по умолчанию.

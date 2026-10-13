@@ -97,6 +97,11 @@ function validateSite(raw) {
   if (typeof site.autoStart !== 'boolean') site.autoStart = false;
   if (typeof site.status !== 'string') site.status = 'stopped';
 
+  // Телеметрия (health/fails) живёт в памяти монитора, а не в реестре (M-02):
+  // ключи из старых db.json выбрасываются, чтобы не возвращались на диск.
+  delete site.health;
+  delete site.fails;
+
   return { site, why: null };
 }
 

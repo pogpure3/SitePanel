@@ -169,6 +169,8 @@ function isBlockedPath(urlPath) {
 }
 
 function serveStatic(site, req, res) {
+  // Тот же диагностический заголовок, что у node-сайтов (H-10).
+  res.setHeader('X-Sitepanel-Site', site.id);
   const root = manager.siteDir(site);
   let urlPath;
   try {
@@ -426,6 +428,16 @@ function handleRequest(req, res, isHttps) {
 function route(req, res, isHttps) {
   const host = hostOf(req);
   const url = req.url || '/';
+
+  // TRACE на публичном прокси не имеет легитимного применения и примыкает к
+  // классу smuggling-атак — отвечаем отказом до маршрутизации (H-10). OPTIONS
+  // не трогаем: CORS-preflight — легитимный сценарий размещённых приложений,
+  // он уходит в приложение как обычный запрос.
+  if (req.method === 'TRACE') {
+    return sendPlaceholder(res, 405, '405 — метод не поддержан', 'Метод TRACE не поддерживается.', {
+      Allow: 'GET, HEAD, POST, PUT, PATCH, DELETE',
+    });
+  }
 
   // За реверс-прокси (nginx) TLS уже терминирован — схема приходит в
   // X-Forwarded-Proto, но верим ему только от доверенного источника (H-07):

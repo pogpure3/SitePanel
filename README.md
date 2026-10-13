@@ -137,7 +137,13 @@ Type=simple
 User=www-data
 WorkingDirectory=/opt/sitepanel
 ExecStart=/usr/bin/node src/index.js
-Restart=always
+# on-failure, а не always: выход с кодом 1 — это «порт занят другим
+# экземпляром», и вечный рестарт каждые 5 секунд только забивал журнал.
+Restart=on-failure
+RestartSec=5
+# Лимит серии рестартов: 5 попыток за минуту, дальше пауза до ручного разбора.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 Environment=NODE_ENV=production
 Environment=PANEL_LE_EMAIL=admin@example.com
 # Необязательно: лимиты автоперезапуска и таймаут установки зависимостей
@@ -147,6 +153,10 @@ Environment=PANEL_LE_EMAIL=admin@example.com
 [Install]
 WantedBy=multi-user.target
 ```
+
+При занятом порту панель печатает в журнал одно внятное сообщение
+(«Порт … уже занят другим процессом — остановите прежний экземпляр панели»)
+и завершается с кодом 1 — systemd с лимитами выше не зациклится.
 
 ### Windows
 
@@ -158,10 +168,13 @@ WantedBy=multi-user.target
 | Путь              | Содержимое                                        |
 |-------------------|---------------------------------------------------|
 | `db.json`         | Состояние: сайты, домены, SSL, настройки          |
+| `db.json.bak`     | Предыдущее поколение `db.json` (для восстановления) |
 | `auth.json`       | Логин и scrypt-хэш пароля админа                  |
+| `state.json`      | Защёлки алертов (переживают рестарт панели)       |
+| `sitepanel.lock`  | Замок единственного экземпляра                    |
 | `sites/<id>/`     | Файлы сайтов; рядом `<id>.backup` — прошлый деплой |
 | `certs/<id>/`     | `privkey.pem`, `fullchain.pem`                    |
-| `logs/<id>.log`   | stdout/stderr сайтов (ротация на 5 МБ)            |
+| `logs/<id>.log`   | stdout/stderr сайтов (ротация)                    |
 | `acme/`           | Ключи аккаунтов Let's Encrypt                     |
 
 ## REST API
@@ -234,7 +247,7 @@ WantedBy=multi-user.target
 
 ## Стек
 
-Node.js ≥ 18 (без нативных модулей), express, http-proxy, acme-client, adm-zip, multer, selfsigned.
+Node.js ≥ 20 (без нативных модулей), express, http-proxy, acme-client, adm-zip, multer, selfsigned.
 Фронтенд — vanilla JS без сборки.
 
 ## Журнал изменений

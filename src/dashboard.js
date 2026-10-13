@@ -17,6 +17,7 @@ let lastCpuTimes = cpuTimes();
 let cpuPct = null;
 let lastMem = readMem();
 let disk = null;
+let diskError = null;
 let diskCheckedAt = 0;
 
 function cpuTimes() {
@@ -83,13 +84,34 @@ async function readDisk() {
       // bavail — доступно непривилегированному пользователю (резерв root не считаем).
       const free = Number.isFinite(st.bavail) ? st.bavail * st.bsize : st.bfree * st.bsize;
       const used = Math.max(0, total - free);
-      disk = { total, used, pct: Math.round((used / total) * 100), path: config.dataDir };
-      return;
+      return { total, used, pct: Math.round((used / total) * 100), path: config.dataDir };
     }
   } catch {
     /* statfs недоступен — пробуем df */
   }
-  disk = await diskViaDf(config.dataDir);
+  return diskViaDf(config.dataDir);
+}
+
+/**
+ * Обновление карточки диска (M-05). Раньше `diskCheckedAt` ставился ДО вызова,
+ * а сам вызов шёл без await: при сбое `readDisk()` карточка показывала старое
+ * значение, метка времени уже была обновлена — правда приходила только через
+ * минуту, а rejection уходил в unhandledRejection. Теперь метка ставится только
+ * при успехе (при сбое повтор на следующем тике), ошибка видна в snapshot.
+ */
+async function refreshDisk() {
+  try {
+    const result = await readDisk();
+    if (result) {
+      disk = result;
+      diskError = null;
+      diskCheckedAt = Date.now();
+    } else {
+      diskError = 'диск недоступен (statfs и df не ответили)';
+    }
+  } catch (err) {
+    diskError = err.message;
+  }
 }
 
 function tick() {
@@ -98,8 +120,7 @@ function tick() {
   push(history.cpu, { t: Date.now(), v: cpuPct });
   push(history.mem, { t: Date.now(), v: lastMem.total ? Math.round((lastMem.used / lastMem.total) * 100) : null });
   if (!disk || Date.now() - diskCheckedAt > 60000) {
-    diskCheckedAt = Date.now();
-    readDisk();
+    refreshDisk();
   }
 }
 
@@ -124,6 +145,7 @@ function snapshot() {
     },
     mem: { ...lastMem, pct: lastMem.total ? Math.round((lastMem.used / lastMem.total) * 100) : null },
     disk,
+    diskError,
     server: {
       hostname: os.hostname(),
       platform: `${os.type()} ${os.arch()}`,
@@ -139,4 +161,4 @@ function snapshot() {
   };
 }
 
-module.exports = { start, snapshot };
+module.exports = { start, snapshot, refreshDisk };

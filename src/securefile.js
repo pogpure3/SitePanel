@@ -131,22 +131,37 @@ function tighten(file, mode = MODE.PRIVATE) {
  * Панель, установленная до этой правки, писала privkey.pem, .env, db.json
  * и auth.json с режимом 0644 — читаемыми любому пользователю машины.
  * Вызывается при старте; на Windows chmod почти ничего не делает и это нормально.
- * @param {object} config из src/config.js
- * @returns {number} сколько файлов удалось ужать
+ *
+ * Выполняется ОДИН РАЗ по маркеру (M-04): раньше каждый старт обходил всё
+ * дерево data/ — включая node_modules сайтов — и выставлял права заново,
+ * в том числе в цикле перезапусков. Список путей теперь фиксированный; при
+ * его изменении нужно поднять HARDEN_VERSION — миграция выполнится ещё раз.
+ *
+ * @param {object} config из src/config.js (используется dataDir)
+ * @returns {number} сколько файлов/каталогов удалось ужать
  */
+const HARDEN_VERSION = 2;
+
 function hardenDataDir(config) {
   if (process.platform === 'win32') return 0;
   const fsMod = fs;
+  const dataDir = config.dataDir;
+  if (!fsMod.existsSync(dataDir)) return 0;
+  const marker = path.join(dataDir, '.permissions-hardened');
+  try {
+    if (fsMod.readFileSync(marker, 'utf8').trim() === String(HARDEN_VERSION)) return 0;
+  } catch { /* маркера нет — выполняем миграцию */ }
+
   let fixed = 0;
 
-  // Сам каталог данных тоже ужимаем: в нём лежат db.json с git-токенами и auth.json.
-  // Раньше он оставался 0755 и просматривался любым пользователем машины (H-16).
-  try {
-    if ((fsMod.statSync(config.dataDir).mode & 0o777) !== MODE.PRIVATE_DIR) {
-      fsMod.chmodSync(config.dataDir, MODE.PRIVATE_DIR);
-      fixed++;
-    }
-  } catch { /* каталога нет — ensureDirs создаст его с нужным режимом */ }
+  const tightenDirIfNeeded = (dir) => {
+    try {
+      if ((fsMod.statSync(dir).mode & 0o777) !== MODE.PRIVATE_DIR) {
+        fsMod.chmodSync(dir, MODE.PRIVATE_DIR);
+        fixed++;
+      }
+    } catch { /* нет каталога — нечего делать */ }
+  };
 
   const tightenIfNeeded = (file, mode) => {
     try {
@@ -163,41 +178,54 @@ function hardenDataDir(config) {
     }
   };
 
-  const walk = (dir, depth = 0) => {
-    if (depth > 6) return;
-    let entries;
-    try {
-      entries = fsMod.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) {
-        // Каталог с ключами сайта — только для владельца.
-        try {
-          if ((fsMod.statSync(full).mode & 0o777) !== MODE.PRIVATE_DIR) {
-            fsMod.chmodSync(full, MODE.PRIVATE_DIR);
-            fixed++;
-          }
-        } catch { /* не критично */ }
-        walk(full, depth + 1);
-      } else if (
-        e.name === '.env' ||
-        e.name === 'privkey.pem' ||
-        e.name === 'auth.json' ||
-        e.name === 'db.json' ||
-        // Ключ аккаунта Let's Encrypt (data/acme/account-*.pem) — тоже приватный:
-        // по нему панель аутентифицируется в ACME, утечка позволяет действовать от её имени.
-        /^account-.*\.pem$/.test(e.name)
-      ) {
-        tightenIfNeeded(full, MODE.PRIVATE);
+  // Сам каталог данных: в нём db.json с git-токенами и auth.json (H-16).
+  tightenDirIfNeeded(dataDir);
+  for (const name of ['sites', 'certs', 'logs', 'tmp', 'acme']) {
+    tightenDirIfNeeded(path.join(dataDir, name));
+  }
+  // Секреты верхнего уровня. state.json — защёлки алертов, секрет не обязателен,
+  // но читать его посторонним незачем.
+  for (const name of ['db.json', 'auth.json', 'state.json']) {
+    tightenIfNeeded(path.join(dataDir, name), MODE.PRIVATE);
+  }
+
+  // Каталоги сайтов: сам каталог 0700 и переносимые секреты 0600. Вглубь
+  // (node_modules, контент сайта) не спускаем — это не секреты панели (M-04).
+  try {
+    for (const e of fsMod.readdirSync(path.join(dataDir, 'sites'), { withFileTypes: true })) {
+      if (!e.isDirectory()) continue;
+      const dir = path.join(dataDir, 'sites', e.name);
+      tightenDirIfNeeded(dir);
+      for (const secret of ['.env', 'config.json']) {
+        tightenIfNeeded(path.join(dir, secret), MODE.PRIVATE);
       }
     }
-  };
+  } catch { /* каталога sites может не быть */ }
 
-  // data/ целиком: там лежат db.json, auth.json, certs/, sites/*/.env
-  walk(config.dataDir);
+  // Сертификаты: каталог сайта 0700 и privkey.pem 0600; fullchain.pem —
+  // публичный, остаётся 0644.
+  try {
+    for (const e of fsMod.readdirSync(path.join(dataDir, 'certs'), { withFileTypes: true })) {
+      if (!e.isDirectory()) continue;
+      const dir = path.join(dataDir, 'certs', e.name);
+      tightenDirIfNeeded(dir);
+      tightenIfNeeded(path.join(dir, 'privkey.pem'), MODE.PRIVATE);
+    }
+  } catch { /* каталога certs может не быть */ }
+
+  // Ключ аккаунта Let's Encrypt: по нему панель аутентифицируется в ACME.
+  try {
+    for (const e of fsMod.readdirSync(path.join(dataDir, 'acme'), { withFileTypes: true })) {
+      if (e.isFile() && /^account-.*\.pem$/.test(e.name)) {
+        tightenIfNeeded(path.join(dataDir, 'acme', e.name), MODE.PRIVATE);
+      }
+    }
+  } catch { /* каталога acme может не быть */ }
+
+  // Маркер — после прохода; при падении записи миграция повторится при старте.
+  try {
+    writePrivateAtomic(marker, HARDEN_VERSION + '\n');
+  } catch { /* не критично */ }
   return fixed;
 }
 

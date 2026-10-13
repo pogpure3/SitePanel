@@ -4,8 +4,11 @@
 // Антифлап: алерт при пересечении порога, повтор раз в 30 минут,
 // сообщение о восстановлении при возврате на 5% ниже порога (гистерезис).
 
+const fs = require('fs');
+const { config } = require('./config');
 const store = require('./store');
 const dashboard = require('./dashboard');
+const secure = require('./securefile');
 
 const CHECK_INTERVAL_MS = 30000;
 const REPEAT_MS = 30 * 60 * 1000;
@@ -19,6 +22,59 @@ const state = {
 // Состояние алертов по сайтам: siteId -> { alerted, lastSent }
 const siteState = new Map();
 const SITE_REPEAT_MS = REPEAT_MS;
+
+/* ---------- Персистентность защёлок (SP-22) ----------
+ * Раньше защёлки жили только в памяти: после рестарта панели алерт
+ * отправлялся повторно при неизменной проблеме, а сообщение «восстановился»
+ * не приходило никогда. Состояние маленькое — пишется в data/state.json
+ * атомарно, с задержкой, чтобы частые переходы не порождали запись на каждый чих.
+ */
+
+const STATE_VERSION = 1;
+let persistTimer = null;
+
+function getStateSnapshot() {
+  const sites = {};
+  for (const [id, v] of siteState) sites[id] = { ...v };
+  return { version: STATE_VERSION, disk: { ...state.disk }, mem: { ...state.mem }, sites };
+}
+
+function persistState() {
+  if (persistTimer) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    try {
+      secure.writePrivateAtomic(config.stateFile, JSON.stringify(getStateSnapshot(), null, 2));
+    } catch (err) {
+      // Потеря состояния защёлок не стоит паники: worst case — повторный алерт.
+      console.error('[alerts] не удалось сохранить состояние защёлок:', err.message);
+    }
+  }, 1000);
+}
+
+function restoreState() {
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(config.stateFile, 'utf8'));
+  } catch {
+    return false; // файла нет или он бит — начинаем с чистого состояния
+  }
+  if (!raw || typeof raw !== 'object' || raw.version !== STATE_VERSION) return false;
+  for (const key of ['disk', 'mem']) {
+    const v = raw[key];
+    if (v && typeof v === 'object') {
+      state[key] = { alerted: !!v.alerted, lastSent: Number(v.lastSent) || 0 };
+    }
+  }
+  if (raw.sites && typeof raw.sites === 'object') {
+    for (const [id, v] of Object.entries(raw.sites)) {
+      if (v && typeof v === 'object') {
+        siteState.set(String(id), { alerted: !!v.alerted, lastSent: Number(v.lastSent) || 0 });
+      }
+    }
+  }
+  return true;
+}
 
 function host() {
   try {
@@ -44,6 +100,7 @@ async function siteDown(site, reason) {
   const ok = await send(`⚠️ SitePanel [${host()}]: сайт ${siteLabel(site)} — ${reason}`);
   if (ok) {
     siteState.set(site.id, { alerted: true, lastSent: Date.now() });
+    persistState();
   }
 }
 
@@ -54,12 +111,13 @@ async function siteUp(site) {
   const ok = await send(`✅ SitePanel [${host()}]: сайт ${siteLabel(site)} восстановился`);
   if (ok) {
     siteState.delete(site.id);
+    persistState();
   }
 }
 
 /** Ручная остановка / удаление — сбрасываем алерт без сообщения. */
 function siteSilentClear(siteId) {
-  siteState.delete(siteId);
+  if (siteState.delete(siteId)) persistState();
 }
 
 function fmtGb(n) {
@@ -115,12 +173,14 @@ async function checkMetric(kind, label, pct, threshold, extra) {
     if (await send(text)) {
       st.alerted = true;
       st.lastSent = Date.now();
+      persistState();
     }
   } else if (!above && below && st.alerted) {
     const text = `✅ SitePanel [${host}]: ${label} вернулась к ${pct}% (порог ${threshold}%)`;
     if (await send(text)) {
       st.alerted = false;
       st.lastSent = 0;
+      persistState();
     }
   }
 }
@@ -144,8 +204,22 @@ async function check() {
 }
 
 function start() {
+  // Защёлки восстанавливаются до первого тика: иначе после рестарта панели
+  // алерт при неизменной проблеме уходил повторно (SP-22).
+  const restored = restoreState();
+  if (restored) console.log('  Состояние алертов восстановлено из data/state.json');
   check();
   setInterval(check, CHECK_INTERVAL_MS);
 }
 
-module.exports = { start, check, send, siteDown, siteUp, siteSilentClear };
+module.exports = {
+  start,
+  check,
+  send,
+  siteDown,
+  siteUp,
+  siteSilentClear,
+  getStateSnapshot,
+  persistState,
+  restoreState,
+};
