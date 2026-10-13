@@ -101,6 +101,11 @@ test('P-04: деплой битого архива не касается раб�
 
 test('T-02: EACCES на data/ превращается в 5xx, панель живёт, запись восстанавливается', async (t) => {
   if (!isPosix) return t.skip('права каталога проверяются на POSIX');
+  if (typeof process.getuid === 'function' && process.getuid() === 0) {
+    // Root пишет в 0500-каталог без вопросов (CAP_DAC_OVERRIDE): симуляция
+    // сбоя записи правами возможна только от непривилегированного пользователя.
+    return t.skip('панель работает от root — DAC не ограничивает запись');
+  }
   const { panel } = await withPanel(t);
   await api(panel, 'PUT', '/api/settings', { leEmail: 'before@example.com' });
 
