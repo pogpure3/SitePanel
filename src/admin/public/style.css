@@ -1,18 +1,53 @@
+/* SitePanel — стили админ-панели.
+   Дизайн по референсу nginx-ui: боковое меню, шапка с хлебной крошкой,
+   карточки, тёмная и светлая темы (переключатель в шапке, выбор сохраняется).
+   Палитры подобраны под контраст >= 4.5:1 (WCAG AA) — тест ui-badge.test.js
+   проверяет обе темы, меняй цвета с оглядкой на него. */
+
+/* ---------- Токены: тёмная тема (по умолчанию) ---------- */
+
 :root {
-  --bg: #0f172a;
-  --bg-card: #1e293b;
-  --bg-hover: #26334a;
-  --border: #334155;
-  --text: #e2e8f0;
-  --text-dim: #94a3b8;
-  /* primary подобран под контраст ≥ 4.5:1 с белым текстом (WCAG AA).
+  --bg: #0f1117;
+  --bg-card: #171b23;
+  --bg-hover: #1e242e;
+  --sidebar: #0b0d12;
+  --border: #262c38;
+  --text: #e6e9f0;
+  --text-dim: #8b93a7;
+  /* primary подобран под контраст >= 4.5:1 с белым текстом (WCAG AA).
      Было #3b82f6 — всего 2.98:1. */
   --primary: #2563eb;
   --primary-hover: #1d4ed8;
+  /* Акцент для ссылок/активных элементов НА ТЕКСТЕ: --primary тёмный и
+     как цвет текста на тёмном фоне даёт < 4.5:1. */
+  --accent: #60a5fa;
   --green: #22c55e;
   --yellow: #eab308;
   --red: #ef4444;
   --radius: 10px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, .35);
+  --topbar-bg: rgba(11, 13, 18, .88);
+  --backdrop: rgba(2, 6, 23, .75);
+}
+
+/* ---------- Светлая тема ---------- */
+
+[data-theme="light"] {
+  --bg: #f4f6f9;
+  --bg-card: #ffffff;
+  --bg-hover: #eef1f6;
+  --sidebar: #ffffff;
+  --border: #dfe3ec;
+  --text: #1c2230;
+  --text-dim: #5d6575;
+  /* Тот же синий, что и в тёмной теме: белый текст на нём держит >= 4.5:1. */
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --accent: #1d4ed8;
+  --shadow: 0 1px 3px rgba(16, 24, 40, .08);
+  --topbar-bg: rgba(255, 255, 255, .88);
+  --backdrop: rgba(15, 23, 42, .45);
 }
 
 * { box-sizing: border-box; }
@@ -27,11 +62,121 @@ body {
 }
 
 code {
-  background: var(--bg-card);
+  background: var(--bg-hover);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 1px 5px;
   font-size: 12px;
+}
+
+.hidden { display: none !important; }
+
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+.icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---------- Каркас: боковое меню + контент ---------- */
+
+.layout { display: flex; min-height: 100vh; }
+
+.sidebar {
+  width: 224px;
+  flex-shrink: 0;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  z-index: 60;
+  transition: width .18s ease;
+}
+
+.brand-row { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+.brand:hover { background: var(--bg-hover); }
+.brand b { color: var(--accent); font-weight: 700; }
+.brand-name { white-space: nowrap; }
+
+.logo-mark { width: 28px; height: 28px; flex-shrink: 0; border-radius: 7px; }
+.logo-bg { fill: var(--primary); }
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 10px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-size: 13.5px;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  transition: background .15s, color .15s;
+  white-space: nowrap;
+}
+.nav-item:hover { background: var(--bg-hover); color: var(--text); }
+/* Активный пункт — синяя «пилюля», как в референсе. */
+.nav-item.active { background: var(--primary); color: #fff; }
+.nav-item.active .icon { stroke-width: 2.2; }
+.nav-label { overflow: hidden; text-overflow: ellipsis; }
+
+.sidebar-footer {
+  padding: 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* Свернутое меню: узкая колонка с иконками. */
+body.sidebar-collapsed .sidebar { width: 64px; }
+body.sidebar-collapsed .brand-name,
+body.sidebar-collapsed .nav-label { display: none; }
+body.sidebar-collapsed .brand { justify-content: center; padding: 8px 4px; }
+body.sidebar-collapsed .nav-item { justify-content: center; padding: 9px 0; }
+body.sidebar-collapsed .sidebar { align-items: stretch; }
+
+.sidebar-backdrop { display: none; }
+
+.main-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ---------- Шапка ---------- */
@@ -46,25 +191,15 @@ code {
   flex-wrap: wrap;
   padding: 8px 20px;
   min-height: 56px;
-  background: rgba(15, 23, 42, .9);
+  background: var(--topbar-bg);
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 50;
   backdrop-filter: blur(8px);
 }
 
-.brand {
-  background: none;
-  border: none;
-  color: var(--text);
-  font-size: 17px;
-  cursor: pointer;
-  padding: 6px 8px;
-  border-radius: 8px;
-}
-.brand b { color: #60a5fa; }
-.brand:hover { background: var(--bg-card); }
+.crumb { font-size: 15px; font-weight: 600; color: var(--text); flex: 1; min-width: 120px; }
 
 .topbar-right {
   display: flex;
@@ -74,23 +209,53 @@ code {
 
 .sysinfo { color: var(--text-dim); font-size: 12px; white-space: nowrap; }
 
-/* На узких экранах сводка по серверу прячется — иначе шапка не влезает. */
-@media (max-width: 760px) {
-  .sysinfo { display: none; }
-  .topbar { padding: 8px 12px; }
-  .topbar-right { flex-wrap: wrap; row-gap: 8px; }
-  main { padding: 18px 12px 60px; }
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.icon-btn:hover { background: var(--bg-hover); color: var(--text); }
+
+.mobile-only { display: none; }
+
+/* Контент: карточки на всю ширину колонки. */
+main {
+  flex: 1;
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 22px 20px 40px;
+}
+
+.footer {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 14px 20px 20px;
+  border-top: 1px solid var(--border);
 }
 
 /* ---------- Кнопки ---------- */
 
 .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   background: var(--bg-card);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 7px 14px;
   font-size: 13px;
+  font-family: inherit;
   cursor: pointer;
   transition: background .15s, border-color .15s;
   white-space: nowrap;
@@ -98,6 +263,7 @@ code {
 }
 .btn:hover { background: var(--bg-hover); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn .icon { width: 15px; height: 15px; }
 
 /* На цветных кнопках текст строго белый: --text (#e2e8f0) на синем давал 4.19:1,
    а белый — 5.17:1. Обычные кнопки сохраняют мягкий --text на тёмном фоне. */
@@ -105,10 +271,11 @@ code {
 .btn-primary:hover { background: var(--primary-hover); }
 .btn-success { background: #14532d; border-color: #166534; color: #fff; }
 .btn-success:hover { background: #166534; }
-.btn-danger { background: #7f1d1d; border-color: #991b1b; }
+.btn-danger { background: #7f1d1d; border-color: #991b1b; color: #fff; }
 .btn-danger:hover { background: #991b1b; }
 .btn-ghost { background: transparent; }
 .btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn-add span { white-space: nowrap; }
 
 /* Видимый фокус для клавиатуры: смена border-color одна не читается.
    :focus-visible не мешает мыши, но обязателен для навигации с Tab. */
@@ -135,13 +302,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   .status-dot.starting { animation: none; opacity: 1; }
 }
 
-/* ---------- Карточки сайтов ---------- */
-
-main {
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: 24px 20px 80px;
-}
+/* ---------- Страница: заголовок ---------- */
 
 .page-head {
   display: flex;
@@ -153,91 +314,36 @@ main {
 
 .back-btn {
   background: none; border: 1px solid var(--border); color: var(--text-dim);
-  border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px;
+  border-radius: var(--radius-sm); padding: 6px 12px; cursor: pointer; font-size: 13px;
 }
-.back-btn:hover { color: var(--text); background: var(--bg-card); }
+.back-btn:hover { color: var(--text); background: var(--bg-hover); }
 
-.site-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 16px 18px;
-  margin-bottom: 12px;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  cursor: pointer;
-  transition: border-color .15s, background .15s;
-}
-.site-card:hover { border-color: #475569; background: var(--bg-hover); }
-
-.status-dot {
-  width: 12px; height: 12px; border-radius: 50%;
-  flex-shrink: 0;
-  background: var(--text-dim);
-}
-.status-dot.running { background: var(--green); box-shadow: 0 0 8px rgba(34, 197, 94, .6); }
-.status-dot.starting { background: var(--yellow); animation: pulse 1.2s infinite; }
-.status-dot.crashed { background: var(--red); box-shadow: 0 0 8px rgba(239, 68, 68, .5); }
-.status-dot.stopped { background: #64748b; }
-
-@keyframes pulse { 50% { opacity: .4; } }
-
-.site-main { flex: 1; min-width: 0; }
-.site-name { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
-.site-meta { color: var(--text-dim); font-size: 12px; margin-top: 3px; display: flex; flex-wrap: wrap; gap: 4px 14px; }
-
-.badge {
-  display: inline-block;
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 20px;
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  background: var(--bg);
-}
-.badge.type { color: #93c5fd; border-color: #1e40af; }
-.badge.ssl-ok { color: #86efac; border-color: #14532d; }
-.badge.ssl-pending { color: var(--yellow); border-color: #713f12; }
-.badge.ssl-error { color: #fca5a5; border-color: #7f1d1d; }
-.badge.loop-bad { color: #fecaca; border-color: #b91c1c; background: #450a0a; }
-.badge.loop-warn { color: #fde68a; border-color: #a16207; background: #422006; }
-
-.site-actions { display: flex; gap: 6px; flex-shrink: 0; }
-
-.empty-state {
-  text-align: center;
-  color: var(--text-dim);
-  padding: 80px 20px;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius);
-}
-.empty-state .big { font-size: 42px; margin-bottom: 12px; }
-
-/* ---------- Детальная страница ---------- */
-
-.detail-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-}
-@media (max-width: 800px) { .detail-grid { grid-template-columns: 1fr; } }
+/* ---------- Панели-карточки ---------- */
 
 .panel {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  box-shadow: var(--shadow);
   padding: 18px;
   margin-bottom: 14px;
 }
 .panel h2 {
   margin: 0 0 12px;
-  font-size: 14px;
+  font-size: 13px;
   text-transform: uppercase;
   letter-spacing: .06em;
   color: var(--text-dim);
 }
 .panel.span2 { grid-column: 1 / -1; }
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 800px) { .detail-grid { grid-template-columns: 1fr; } }
 
 .kv { display: grid; grid-template-columns: 150px 1fr; gap: 6px 12px; font-size: 13px; }
 .kv dt { color: var(--text-dim); }
@@ -253,13 +359,100 @@ input[type="text"], input[type="password"], input[type="email"], select, textare
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 8px 12px;
   font-size: 13px;
   font-family: inherit;
 }
+[data-theme="light"] input, [data-theme="light"] select, [data-theme="light"] textarea {
+  background: #fff;
+}
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--primary); }
-::placeholder { color: #94a3b8; opacity: 1; }
+::placeholder { color: var(--text-dim); opacity: .8; }
+
+label.checkbox { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+label.checkbox input { width: auto; }
+
+/* ---------- Статусы и бейджи ---------- */
+
+.status-dot {
+  width: 12px; height: 12px; border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-dim);
+  display: inline-block;
+}
+.status-dot.running { background: var(--green); box-shadow: 0 0 8px rgba(34, 197, 94, .6); }
+.status-dot.starting { background: var(--yellow); animation: pulse 1.2s infinite; }
+.status-dot.crashed { background: var(--red); box-shadow: 0 0 8px rgba(239, 68, 68, .5); }
+.status-dot.stopped { background: #64748b; }
+
+@keyframes pulse { 50% { opacity: .4; } }
+
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  background: var(--bg);
+}
+.badge.type { color: var(--accent); border-color: var(--primary); }
+.badge.ssl-ok { color: #4ade80; border-color: var(--green); }
+[data-theme="light"] .badge.ssl-ok { color: #15803d; }
+.badge.ssl-pending { color: var(--yellow); border-color: #a16207; }
+[data-theme="light"] .badge.ssl-pending { color: #854d0e; }
+.badge.ssl-error { color: #f87171; border-color: var(--red); }
+[data-theme="light"] .badge.ssl-error { color: #b91c1c; }
+.badge.loop-bad { color: #fecaca; border-color: #b91c1c; background: #450a0a; }
+.badge.loop-warn { color: #fde68a; border-color: #a16207; background: #422006; }
+
+/* ---------- Список сайтов: таблица ---------- */
+
+.table-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow-x: auto;
+}
+
+.sites-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 640px; }
+.sites-table th {
+  text-align: left;
+  color: var(--text-dim);
+  font-weight: 500;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.sites-table td { padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.sites-table tbody tr:last-child td { border-bottom: none; }
+.sites-table tbody tr { cursor: pointer; transition: background .12s; }
+.sites-table tbody tr:hover td { background: var(--bg-hover); }
+
+.site-name-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.site-title { font-weight: 600; font-size: 14px; }
+.site-cell-meta { color: var(--text-dim); font-size: 12px; margin-top: 2px; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.cell-dim { color: var(--text-dim); font-size: 12.5px; white-space: nowrap; }
+.row-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: nowrap; }
+
+.empty-state {
+  text-align: center;
+  color: var(--text-dim);
+  padding: 80px 20px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+.empty-state .big { font-size: 42px; margin-bottom: 12px; }
+
+.list-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.list-bar input[type="text"] { max-width: 280px; }
+
+/* ---------- Домены ---------- */
 
 .domain-list { display: flex; flex-direction: column; gap: 6px; }
 .domain-row {
@@ -268,10 +461,11 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   justify-content: space-between;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 7px 12px;
   font-size: 13px;
 }
+[data-theme="light"] .domain-row { background: #fff; }
 .domain-row .remove {
   background: none; border: none; color: var(--text-dim); cursor: pointer;
   font-size: 15px; padding: 2px 6px; border-radius: 6px;
@@ -280,10 +474,12 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 .domain-row .remove:hover { color: var(--red); background: var(--bg-hover); }
 .domain-hint { color: var(--text-dim); font-size: 12px; margin-top: 10px; line-height: 1.6; }
 
+/* ---------- Логи ---------- */
+
 .log-box {
   background: #020617;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 12px;
   font-family: Consolas, 'Courier New', monospace;
   font-size: 12px;
@@ -297,7 +493,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 }
 
 .health-strip { display: flex; gap: 3px; margin-top: 8px; flex-wrap: wrap; }
-.health-cell { display: inline-block; width: 10px; height: 18px; border-radius: 3px; background: #334155; }
+.health-cell { display: inline-block; width: 10px; height: 18px; border-radius: 3px; background: var(--border); }
 .health-cell.ok { background: var(--green); }
 .health-cell.fail { background: var(--red); }
 
@@ -307,7 +503,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   background: #422006;
   border: 1px solid #713f12;
   color: #fde68a;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 8px 12px;
   font-size: 12px;
   margin-top: 10px;
@@ -317,9 +513,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 
 .modal-backdrop {
   position: fixed; inset: 0;
-  background: rgba(2, 6, 23, .75);
+  background: var(--backdrop);
   display: flex; align-items: center; justify-content: center;
-  z-index: 50;
+  z-index: 90;
   padding: 20px;
 }
 .modal-backdrop.hidden { display: none; }
@@ -341,8 +537,6 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 .modal .checkbox { display: flex; align-items: center; gap: 8px; }
 .modal .checkbox input { width: auto; margin: 0; }
 
-.hidden { display: none !important; }
-
 /* Визуально скрыто, но доступно скринридеру — для меток полей без подписи. */
 .sr-only {
   position: absolute;
@@ -360,8 +554,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 
 .fm-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .crumbs { font-size: 13px; color: var(--text-dim); word-break: break-all; }
-/* Ссылка — светлый тон: #2563eb на карточке давал лишь 2.8:1. */
-.crumbs a { color: #60a5fa; cursor: pointer; text-decoration: none; }
+/* Ссылка — акцентный тон: --primary на карточке читается хуже акцентного. */
+.crumbs a { color: var(--accent); cursor: pointer; text-decoration: none; }
 .crumbs a:hover { text-decoration: underline; }
 
 .fm-table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -387,7 +581,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   font-size: 12.5px;
   line-height: 1.5;
   padding: 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   resize: vertical;
 }
 #editArea:focus { outline: none; border-color: var(--primary); }
@@ -420,7 +614,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   gap: 20px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 10px 14px;
   margin-top: 14px;
 }
@@ -432,14 +626,71 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 .progress-bar { height: 100%; width: 0; background: var(--primary); transition: width .2s; }
 .progress.hidden { display: none; }
 
+/* ---------- Пользователи ---------- */
+
+.users-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.users-table th { text-align: left; color: var(--text-dim); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.users-table td { padding: 10px; border-bottom: 1px solid var(--border); }
+.users-table tbody tr:last-child td { border-bottom: none; }
+.role-badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  border: 1px solid var(--primary);
+  color: var(--accent);
+  background: var(--bg);
+}
+
+/* ---------- Терминал ---------- */
+
+.term-wrap {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+.term-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+  flex-wrap: wrap;
+}
+.term-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.term-status { font-size: 12px; }
+.term-status .status-dot { width: 9px; height: 9px; }
+.term-status.ok { color: var(--green); }
+.term-status.off { color: var(--text-dim); }
+.term-status.err { color: var(--red); }
+.term-toolbar .spacer { flex: 1; }
+#terminalBox { height: calc(100vh - 260px); min-height: 420px; padding: 8px 10px; }
+/* xterm.css жёстко красит вьюпорт в чёрный: на светлой теме просвечивал чёрный
+   фон вокруг полотна. Фон рисует canvas по theme.background — вьюпорт прозрачный. */
+.xterm .xterm-viewport { background-color: transparent !important; }
+/* Скроллбар xterm под палитру панели. */
+.xterm .xterm-viewport::-webkit-scrollbar { width: 8px; }
+.xterm .xterm-viewport::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+.term-note { margin-top: 12px; }
+
 /* ---------- Тосты ---------- */
 
-#toasts { position: fixed; bottom: 20px; right: 20px; z-index: 100; display: flex; flex-direction: column; gap: 8px; }
+#toasts { position: fixed; bottom: 20px; right: 20px; z-index: 120; display: flex; flex-direction: column; gap: 8px; }
 .toast {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-left: 3px solid var(--primary);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 10px 16px;
   font-size: 13px;
   max-width: 420px;
@@ -456,10 +707,12 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   max-width: 1100px;
   padding: 10px 16px;
   border: 1px solid #b45309;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: #451a03;
   color: #fde68a;
   font-size: 13px;
+  z-index: 80;
+  position: relative;
 }
 .conn-banner.sticky { border-color: #991b1b; background: #450a0a; color: #fecaca; }
 .conn-banner.hidden { display: none; }
@@ -479,3 +732,37 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   transition: width .2s ease;
 }
 .global-progress.hidden { display: none; }
+
+/* ---------- Узкие экраны ---------- */
+
+/* Планшет и телефон: боковое меню уходит в ящик, открывается кнопкой. */
+@media (max-width: 900px) {
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    transform: translateX(-100%);
+    transition: transform .18s ease;
+    width: 224px !important;
+  }
+  body.sidebar-open .sidebar { transform: translateX(0); }
+  body.sidebar-open .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: var(--backdrop);
+    z-index: 55;
+  }
+  .mobile-only { display: inline-flex; }
+  #collapseBtn { display: none; }
+  main { padding: 18px 12px 40px; }
+}
+
+/* На узких экранах сводка по серверу прячется — иначе шапка не влезает. */
+@media (max-width: 760px) {
+  .sysinfo { display: none; }
+  .topbar { padding: 8px 12px; }
+  .topbar-right { flex-wrap: wrap; row-gap: 8px; }
+  .btn-add span { display: none; }
+  .crumb { font-size: 14px; }
+}

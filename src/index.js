@@ -16,6 +16,7 @@ const alerts = require('./alerts');
 const manager = require('./sites/manager');
 const { createServers, listenServers, securityHeaders } = require('./httpserver');
 const adminRoutes = require('./admin/routes');
+const terminal = require('./admin/terminal');
 
 // Защита от повторного входа в шатдаун (два сигнала подряд).
 let shuttingDown = false;
@@ -116,6 +117,13 @@ async function main() {
     process.exit(1);
   });
   adminServer.keepAliveTimeout = 65000;
+  // Веб-терминал: WS-канал на том же порту админки. Авторизация — через
+  // одноразовые токены /api/terminal/token (Basic + CSRF); PANEL_TERMINAL=0
+  // выключает функцию целиком.
+  if (process.env.PANEL_TERMINAL !== '0') {
+    terminal.attach(adminServer);
+    console.log('  Веб-терминал:           ws-апгрейд на порту ' + config.adminPort);
+  }
 
   const servers = createServers();
   await listenServers(servers);
@@ -156,6 +164,8 @@ async function main() {
     }
     shuttingDown = true;
     console.log(`\n  Остановка (${signal})...`);
+    // Веб-терминал: гасим открытые shell-сессии до убийства процессов сайтов.
+    try { terminal.shutdown(); } catch { /* сессий могло не быть */ }
     // Глушим процессы напрямую, не трогая статусы: кто был running —
     // останется running в db и поднимется при следующем старте панели.
     const pids = [];

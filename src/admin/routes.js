@@ -17,6 +17,7 @@ const acme = require('../ssl/acme');
 const monitor = require('../monitor');
 const dashboard = require('../dashboard');
 const alerts = require('../alerts');
+const terminal = require('./terminal');
 
 const router = express.Router();
 router.use(auth.middleware);
@@ -468,6 +469,32 @@ router.get('/dashboard', wrap(async (_req, res) => {
     running: store.state.sites.filter((s) => s.status === 'running').length,
   };
   res.json(data);
+}));
+
+/* ---------- Терминал и пользователи ---------- */
+
+// Токен выдаётся только авторизованному запросу (auth.middleware выше) с
+// CSRF-заголовком: WebSocket сам Basic не подставляет, поэтому рукопожатие
+// подтверждается одноразовым токеном (см. src/admin/terminal.js).
+router.post('/terminal/token', wrap(async (_req, res) => {
+  try {
+    res.json(terminal.issueToken());
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+}));
+
+router.get('/terminal/status', wrap(async (_req, res) => {
+  res.json({ enabled: !terminal.isDisabled(), sessions: terminal.sessionCount() });
+}));
+
+// Список учётных записей. Панель администрируется одной учёткой (auth.json),
+// страница «Пользователи» показывает её и позволяет сменить логин/пароль.
+router.get('/users', wrap(async (_req, res) => {
+  res.json({
+    users: [{ user: auth.getUser(), role: 'admin' }],
+    note: 'Панель использует одну учётную запись администратора (data/auth.json).',
+  });
 }));
 
 router.get('/system', wrap(async (_req, res) => {

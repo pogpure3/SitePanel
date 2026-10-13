@@ -130,3 +130,30 @@ test('UI: дашборд, hash-роутинг, домены, health-полоск
 
   assert.deepEqual(consoleErrors, [], `ошибки в консоли браузера: ${consoleErrors.slice(0, 3)}`);
 });
+
+test('UI: терминал подключается и выполняет команду (e2e)', { timeout: 60000 }, async (t) => {
+  if (!chromium) return t.skip('playwright не установлен (npm i -D playwright && npx playwright install chromium)');
+  const panel = await startPanel();
+  const { page, consoleErrors } = await withBrowser(t, panel);
+
+  await page.goto(panel.base + '/#/terminal', { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('#terminalBox .xterm', { timeout: 15000 });
+  // Серверное приветствие дошло до эмулятора: канал сервер -> браузер жив.
+  await page.waitForFunction(() => {
+    let text = '';
+    // eslint-disable-next-line no-undef
+    document.querySelectorAll('#terminalBox .xterm-rows > div').forEach((r) => { text += r.textContent; });
+    return text.length > 0;
+  }, { timeout: 20000 });
+  // Команда через onData-канал xterm: браузер -> сервер -> shell -> обратно.
+  // eslint-disable-next-line no-undef
+  await page.evaluate(() => term.input('echo TERMINAL_E2E_MARKER\r'));
+  await page.waitForFunction(() => {
+    let text = '';
+    // eslint-disable-next-line no-undef
+    document.querySelectorAll('#terminalBox .xterm-rows > div').forEach((r) => { text += r.textContent; });
+    return text.includes('TERMINAL_E2E_MARKER');
+  }, { timeout: 20000 });
+
+  assert.deepEqual(consoleErrors, [], `ошибки в консоли браузера: ${consoleErrors.slice(0, 3)}`);
+});

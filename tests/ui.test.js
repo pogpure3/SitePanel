@@ -24,37 +24,79 @@ function ratio(a, b) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-/** Читает значение CSS-переменной из :root. */
+/** Блок CSS-правила по селектору (первое вхождение, без вложенных @-блоков). */
+function ruleBlock(selector) {
+  const re = new RegExp(selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}');
+  const m = re.exec(CSS);
+  assert.ok(m, `в style.css не найден блок ${selector}`);
+  return m[1];
+}
+
+/** Читает значение CSS-переменной из :root (тёмная тема, она же по умолчанию). */
 function cssVar(name) {
-  const m = new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{3,8})`).exec(CSS);
-  assert.ok(m, `в style.css не найдена переменная --${name}`);
+  const m = new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{3,8})`).exec(ruleBlock(':root'));
+  assert.ok(m, `в :root не найдена переменная --${name}`);
+  return m[1];
+}
+
+/** То же для светлой темы (блок [data-theme="light"]). */
+function cssVarLight(name) {
+  const m = new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{3,8})`).exec(ruleBlock('[data-theme="light"]'));
+  assert.ok(m, `в [data-theme="light"] не найдена переменная --${name}`);
   return m[1];
 }
 
 const AA = 4.5;
 
-test('палитра: контраст текста >= 4.5:1 (WCAG AA)', () => {
+function checkPairs(pairs, label) {
+  const bad = [];
+  for (const [name, fg, b] of pairs) {
+    const r = ratio(fg, b);
+    if (r < AA) bad.push(`${name}: ${r.toFixed(2)}:1 (${fg} на ${b})`);
+  }
+  assert.deepEqual(bad, [], `Контраст ниже AA (${label}):\n` + bad.join('\n'));
+}
+
+test('палитра: контраст текста >= 4.5:1 (WCAG AA), тёмная тема', () => {
   const bg = cssVar('bg');
   const card = cssVar('bg-card');
   const text = cssVar('text');
   const dim = cssVar('text-dim');
-  const primary = cssVar('primary');
 
-  const pairs = [
+  checkPairs([
     // Кнопки: белый текст на основном цвете — главная регрессия (было 2.98:1).
-    ['white on primary', '#ffffff', primary],
+    ['white on primary', '#ffffff', cssVar('primary')],
     ['white on primary-hover', '#ffffff', cssVar('primary-hover')],
     ['text on bg', text, bg],
     ['text on bg-card', text, card],
     ['text-dim on bg', dim, bg],
     ['text-dim on bg-card', dim, card],
-  ];
-  const bad = [];
-  for (const [label, fg, b] of pairs) {
-    const r = ratio(fg, b);
-    if (r < AA) bad.push(`${label}: ${r.toFixed(2)}:1 (${fg} на ${b})`);
-  }
-  assert.deepEqual(bad, [], 'Контраст ниже AA:\n' + bad.join('\n'));
+  ], 'тёмная тема');
+});
+
+test('палитра: контраст текста >= 4.5:1 (WCAG AA), светлая тема', () => {
+  const bg = cssVarLight('bg');
+  const card = cssVarLight('bg-card');
+  const text = cssVarLight('text');
+  const dim = cssVarLight('text-dim');
+
+  checkPairs([
+    ['white on primary', '#ffffff', cssVarLight('primary')],
+    ['white on primary-hover', '#ffffff', cssVarLight('primary-hover')],
+    ['text on bg', text, bg],
+    ['text on bg-card', text, card],
+    ['text-dim on bg', dim, bg],
+    ['text-dim on bg-card', dim, card],
+  ], 'светлая тема');
+});
+
+test('палитра: акцентный текст читается в обеих темах', () => {
+  // .crumbs a и .brand b красятся в --accent: он обязан иметь контраст >= AA
+  // с фоном карточки в каждой теме.
+  const dark = ratio(cssVar('accent'), cssVar('bg-card'));
+  const light = ratio(cssVarLight('accent'), cssVarLight('bg-card'));
+  assert.ok(dark >= AA, `--accent на карточке (тёмная): ${dark.toFixed(2)}:1`);
+  assert.ok(light >= AA, `--accent на карточке (светлая): ${light.toFixed(2)}:1`);
 });
 
 test('палитра: основной цвет не светлее порога для белого текста', () => {
