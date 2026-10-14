@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # Усиление старого стенда 46.29.164.250 (задача 7.1 / I-04 плана).
 #
-# ВНИМАНИЕ: СКРИПТ НЕ ПРИМЕНЯЛСЯ. По правилам AGENTS.md изменения, затрагивающие
-# доступ, применяются только с явного согласия пользователя. Ошибки в sshd-блоке
-# могут ЗАБЛОКИРОВАТЬ доступ к боевому серверу.
+# ПРИМЕНЁН 2026-10-14 (см. WORKLOG). Оставлен для воспроизведения на новом
+# развёртывании. Нюансы, выявленные при применении:
+#   - файл обязан называться 01-…: sshd берёт ПЕРВОЕ значение параметра,
+#     и 50-cloud-init.conf (PasswordAuthentication yes) молча перекрывал бы
+#     файл с большим номером;
+#   - на стенде был мёртвый PPA certbot/certbot (нет Release для noble,
+#     certbot стоит из noble/universe) — apt-get update падал, из-за `&&`
+#     не выполнялась установка fail2ban; PPA отключён, шаг update сделан
+#     нефатальным.
 #
 # Перед запуском:
 #   1. Убедиться, что есть работающий доступ по ключу И консоль провайдера
@@ -48,16 +54,17 @@ fi
 
 echo "=== 3/4 fail2ban (sshd) ==="
 if ! command -v fail2ban-client >/dev/null; then
-  apt-get update -qq && apt-get install -y -qq fail2ban
+  apt-get update -qq || true # падение одного репо (например, мёртвого PPA) не должно мешать установке
+  apt-get install -y -qq fail2ban
 fi
 systemctl enable --now fail2ban
 fail2ban-client status sshd || true
 
 echo "=== 4/4 swap 2G ==="
 if [ ! -f /swapfile ]; then
+  bak /etc/fstab
   fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
   grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
-  bak /etc/fstab
   # Умеренный своп: память сначала заканчивают приложения, кэш — вторым.
   printf 'vm.swappiness=10\nvm.vfs_cache_pressure=50\n' > /etc/sysctl.d/99-sitepanel.conf
   sysctl --system >/dev/null

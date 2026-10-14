@@ -290,6 +290,19 @@
 
 ### Инфраструктура стенда
 
+**panel_test усилен (7.1 / I-04, 2026-10-14)**: sshd — вход root только по
+ключу (`/etc/ssh/sshd_config.d/01-hardening.conf`, парольный вход выключен;
+ловушка «первого значения» cloud-init учтена именем `01-…`); fail2ban 1.0.2
+с активным sshd-jail (сразу забанил 3 IP); swap 2 ГиБ с `vm.swappiness=10` /
+`vm.vfs_cache_pressure=50`. UFW уже был активен (22/80/443). Мёртвый PPA
+`certbot/certbot` отключён (нет Release для noble; certbot стоит из
+noble/universe). Бэкапы: `/etc/ssh/sshd_config.bak.20261014-093227`,
+`/etc/fstab.bak.20261014-093227`,
+`/etc/apt/sources.list.d/certbot-ubuntu-certbot-noble.sources.bak.20261014-123421`.
+Проверено: новое подключение только по ключу, сайты/админка 200, nginx -t ok.
+Ранбук `scripts/harden-old-stand.sh` поправлен (бэкап fstab до правки,
+`apt-get update` нефатален) и переведён в статус «применён».
+
 **Мобильные карточки списка сайтов выложены на оба стенда** (2026-10-14):
 `app.js` и `style.css` переданы в `/opt/sitepanel/src/admin/public/` на
 panel_test и panel_beget (продакт); md5 совпадают с рабочей копией на трёх

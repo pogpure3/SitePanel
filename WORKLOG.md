@@ -8,6 +8,79 @@
 
 ---
 
+## 2026-10-14 — 7.1: усиление panel_test (sshd только по ключу, fail2ban, swap)
+
+**Запрос.** «Делай 7.1» — применение ранбука `scripts/harden-old-stand.sh`
+(задача 7.1 / I-04 плана, требовала явного согласия пользователя, получено).
+
+**Диагностика — состояние до (проверено по SSH).**
+
+- sshd: `sshd -T` → `permitrootlogin yes`, `passwordauthentication yes`;
+  в `/etc/ssh/sshd_config.d/` лежали `50-cloud-init.conf`
+  (`PasswordAuthentication yes`) и `60-cloudimg-settings.conf` (`no`) —
+  ловушка «первого значения» актуальна, файл усиления обязан называться
+  `01-…`.
+- UFW **уже был активен**: default deny incoming / allow outgoing, правила
+  22/80/443 (v4+v6) — шаг UFW ранбука свёлся к идемпотентному повторению.
+- fail2ban: не установлен (`is-active` → inactive, dpkg пуст).
+- swap: 0 (RAM 1.9 Ги).
+- Слушатели: 22 (sshd), 80/443 (nginx), 51820 (nginx `stub_status` из
+  `/etc/nginx/conf.d/stub_status_nginx-ui.conf` — снаружи уже закрыт UFW),
+  loopback 3100 (админка панели), 9000 (nginx-ui), 53 (resolved); на всех
+  интерфейсах 8080/8443 (прокси панели) и 10001 (сайт pqr) — снаружи закрыты
+  UFW, наружу нужны только 22/80/443.
+- Вход по ключу подтверждён ДО правок: `ssh -o PasswordAuthentication=no
+  panel_test 'echo KEY-OK'` → KEY-OK; алиас: root@46.29.164.250:22, ключ
+  `~/.ssh/sitepanel_vps` (единственный в `authorized_keys`,
+  `sitepanel-vps-46.29.164.250`).
+- На время работ поднята контрольная вторая сессия (фоновый ssh `sleep 1800`),
+  остановлена после всех проверок.
+
+**Изменения — panel_test.**
+
+- `/etc/ssh/sshd_config.d/01-hardening.conf` (новый): `PermitRootLogin
+  prohibit-password`, `PasswordAuthentication no`, `PubkeyAuthentication yes`.
+  Бэкап: `/etc/ssh/sshd_config.bak.20261014-093227` (время стенда, UTC;
+  12:32 МСК). `sshd -t` успешен, `systemctl reload ssh` применён.
+- `/swapfile` 2 ГиБ (fallocate, 600, mkswap, swapon), строка в `/etc/fstab`
+  (бэкап ДО правки — исправлен порядок ранбука: `bak` вызывался после
+  добавления строки), `/etc/sysctl.d/99-sitepanel.conf`
+  (`vm.swappiness=10`, `vm.vfs_cache_pressure=50`), `sysctl --system`
+  применён. Бэкап: `/etc/fstab.bak.20261014-093227`.
+- fail2ban 1.0.2-3ubuntu0.1 установлен, `systemctl enable --now`, jail `sshd`
+  активен (backend systemd journal). Прямо на применение: **banned 3 IP,
+  257 failed** — брутфорс идёт постоянно.
+- Попутно: мёртвый PPA `certbot/certbot` отключён — у PPA нет Release для
+  noble, `apt-get update` падал с ошибкой и из-за `&&` в ранбуке блокировал
+  установку fail2ban. certbot 2.9.0 стоит из noble/universe, PPA ничего не
+  поставляет. Бэкап: `/etc/apt/sources.list.d/certbot-ubuntu-certbot-noble.sources.bak.20261014-123421`,
+  файл переименован в `…sources.disabled`. `apt-get update` теперь чистый.
+- `scripts/harden-old-stand.sh` (в репо): исправлен порядок бэкапа fstab,
+  шаг `apt-get update` сделан нефатальным, заголовок переведён в статус
+  «применён» с нюансами.
+
+**Проверка.**
+
+- Новое подключение с `PasswordAuthentication=no` → успех; `sshd -T`:
+  `permitrootlogin without-password`, `passwordauthentication no`,
+  `pubkeyauthentication yes`, `kbdinteractiveauthentication no`.
+- `systemctl is-active`: sitepanel/nginx/ufw/fail2ban — active.
+- `free -h`: Swap 2.0Gi; `swapon --show` — `/swapfile` prio -2;
+  `sysctl` — 10 и 50.
+- `nginx -t` — syntax ok, test successful.
+- Извне: `pqr.evil-mesh.ru` → 200, `panel.evil-mesh.ru/login` → 200,
+  `/healthz` → 200.
+- Отметка apt (не действие): ядро ждёт перезагрузки («Restarting the system to
+  load the new kernel…») — ребут не делался, вне задачи.
+
+**Осталось.**
+
+- Этап 5 (изоляция прав A-04) — последний несогласованный пункт плана.
+- Перезагрузка стенда для нового ядра — на усмотрение пользователя (окно
+  обслуживания).
+
+---
+
 ## 2026-10-14 — Выкладка на прод panel_beget: мобильные карточки списка сайтов
 
 **Запрос.** «Отправляй на прод» — перенос правки 1141a08 (мобильный список
