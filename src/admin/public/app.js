@@ -545,9 +545,9 @@ function siteRowHtml(s) {
         </div>
       </div>
     </td>
-    <td class="cell-domains cell-dim"></td>
-    <td class="cell-mem cell-dim"></td>
-    <td class="cell-updated cell-dim"></td>
+    <td class="cell-domains cell-dim" data-label="Домены"></td>
+    <td class="cell-mem cell-dim" data-label="Память"></td>
+    <td class="cell-updated cell-dim" data-label="Обновлён"></td>
     <td>
       <div class="row-actions">
         <button class="btn btn-sm btn-success act-start" title="Запустить">▶</button>

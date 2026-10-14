@@ -449,6 +449,39 @@ label.checkbox input { width: auto; }
 }
 .empty-state .big { font-size: 42px; margin-bottom: 12px; }
 
+/* Телефон: таблица сайтов — карточками, информация о сайте в столбец.
+   Шапка таблицы прячется, поля подписываются через td[data-label]. */
+@media (max-width: 640px) {
+  .list-bar input[type="text"] { max-width: none; flex: 1; }
+  .sites-table { min-width: 0; display: block; }
+  .sites-table thead { display: none; }
+  .sites-table tbody { display: block; }
+  .sites-table tbody tr {
+    display: block;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sites-table tbody tr:last-child { border-bottom: none; }
+  .sites-table tbody tr:hover { background: var(--bg-hover); }
+  .sites-table tbody tr:hover td { background: transparent; }
+  .sites-table td { display: block; padding: 0; border-bottom: none; }
+  .sites-table td + td { margin-top: 12px; }
+  .cell-dim { white-space: normal; overflow-wrap: anywhere; }
+  .cell-domains::before,
+  .cell-mem::before,
+  .cell-updated::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--text-dim);
+    font-weight: 500;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    margin-bottom: 2px;
+  }
+  .row-actions { justify-content: flex-start; flex-wrap: wrap; }
+}
+
 .list-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
 .list-bar input[type="text"] { max-width: 280px; }
 
