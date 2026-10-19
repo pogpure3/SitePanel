@@ -202,6 +202,10 @@ docker compose up -d --build
   `node`; порты 80/443 он открывает через `cap_add: NET_BIND_SERVICE`
   (без `--privileged` и без root). `PANEL_LE_EMAIL` удобно передать при запуске:
   `PANEL_LE_EMAIL=admin@example.com docker compose up -d`.
+- **Админка внутри контейнера** слушает `0.0.0.0` (`PANEL_ADMIN_HOST=0.0.0.0`
+  в compose): иначе published-порт не достучится до дефолтного
+  loopback-бинда. Наружу хоста она не светит — `ports` публикует только
+  `127.0.0.1:3000`.
 - **Веб-терминал** внутри контейнера работает в режиме `script` — нативный
   `node-pty` в образ не ставится (не нужен компилятор, образ тоньше).
 

@@ -8,6 +8,61 @@
 
 ---
 
+## 2026-10-19 — Docker на panel_test + первая сборка образа sitepanel
+
+**Запрос.** «Установи докер на тестовый стенд» — установка Docker на panel_test
+и (естественное продолжение, заявлено в «Осталось» записи про deploy-файлы)
+первая реальная сборка образа `sitepanel`.
+
+**Диагностика.** Ubuntu 24.04.4 LTS (noble), `systemd-detect-virt` → kvm,
+x86_64, `/` 20G (7.3G занято) — установка возможна; docker не стоял; UFW
+active (22/80/443), 7.1-усиление активно, панель в systemd.
+
+**Изменения — panel_test.**
+- Официальный apt-репозиторий Docker: `/etc/apt/keyrings/docker.asc`
+  (ключ download.docker.com), `/etc/apt/sources.list.d/docker.list`
+  (`deb [arch=amd64 signed-by=...] https://download.docker.com/linux/ubuntu noble stable`)
+  — файлы новые, существовавшие sources не менялись.
+- Установлены `docker-ce`, `docker-ce-cli`, `containerd.io`,
+  `docker-buildx-plugin`, `docker-compose-plugin` (apt, noninteractive).
+- Смоук-контейнер `sitepanel-smoke` создан, проверен и **удален**; образ
+  `hello-world` удалён; **остался образ `sitepanel:latest` (~300 МБ)**.
+- На стенд дополнительно выложены `deploy/Dockerfile`,
+  `deploy/docker-compose.yml` (md5 совпадает с локальным) и `.dockerignore`
+  — в `/opt/sitepanel/` для сборки.
+
+**Изменения — репозиторий** (коммит ниже): в `deploy/docker-compose.yml`
+добавлен `PANEL_ADMIN_HOST: 0.0.0.0` — **дефект, найденный при подготовке
+смоука**: панель по умолчанию биндит админку на 127.0.0.1 (`src/config.js`
+adminHost), published-порт контейнера до неё не доставал. Наружу хоста админка
+не светит: `ports` публикует только `127.0.0.1:3000`. README дополнен
+пояснением; CHANGELOG — секция «Инфраструктура стенда».
+
+**Проверка.**
+- Установка: `docker --version` → 29.9.1; `docker compose version` → v5.6.0;
+  сервис active + enabled.
+- Docker Hub доступен без зеркал: `docker pull hello-world` → ok.
+- Сборка: `docker build -f deploy/Dockerfile -t sitepanel:latest /opt/sitepanel`
+  — успешно (npm ci, ~2 мин).
+- Смоук-контейнер: `docker run -d --cap-add NET_BIND_SERVICE -e
+  PANEL_ADMIN_HOST=0.0.0.0 -e PANEL_ADMIN_PORT=3101 -e PANEL_HTTP_PORT=18080
+  -e PANEL_HTTPS_PORT=18443 -p 127.0.0.1:3101:3101 sitepanel:latest`:
+  `/healthz` → `{"ok":true}`; `/login` → 200; `docker exec whoami` → **node**
+  (не root); пароль первого запуска напечатан в `docker logs` (значение в
+  журнал не переносилось); прокси-порт 18080 отвечает из сети docker
+  (HTTP/1.1 404 — штатная заглушка на чужой Host); `/app/data` наполнился
+  (auth.json, sites, certs, logs, backups) — права записи под `node` работают.
+- Стенд не пострадал: sitepanel active (аптайм непрерывный), `pqr` через
+  прокси → 301, UFW active, цепочка `DOCKER-USER` создана, диск 8.3G/20G.
+
+**Осталось.**
+- **Docker и UFW**: опубликованные (`-p`) порты контейнеров обрабатываются
+  iptables-цепочками Docker в обход правил UFW INPUT — перед публикацией
+  порта наружу помнить, что UFW его не прикроет. Сейчас наружу не опубликовано
+  ничего (смоук был только на 127.0.0.1).
+- На panel_beget Docker НЕ ставился. Образ `sitepanel:latest` на тестовом
+  стенде — остаток смоука; удалить, если будет мешать (`docker rmi sitepanel:latest`).
+
 ## 2026-10-19 — Деплой-файлы: deploy/Dockerfile + deploy/docker-compose.yml
 
 **Запрос.** «Добавь Деплой: deploy/Dockerfile + docker-compose.yml» — Docker-развёртывание панели.
