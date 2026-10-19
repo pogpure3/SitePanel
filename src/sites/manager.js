@@ -1472,6 +1472,70 @@ async function _rollback(site) {
   return { ok: true };
 }
 
+/* ---------- Восстановление из бэкапа (модуль backups.js) ---------- */
+
+// Логика здесь, а не в backups.js: нужны внутренние _stop/_start. Публичные
+// start/stop берут блокировку сайта сами — withSiteLock поверх дал бы
+// повторный вход, который lock.js отвергает.
+async function _restoreBackup(site, zipPath) {
+  const dir = siteDir(site);
+  if (!fs.existsSync(dir)) return { ok: false, error: 'Каталог сайта не найден' };
+  const wasRunning = isRunning(site);
+  if (wasRunning) await _stop(site);
+
+  // Распаковка в staging в data/tmp: та же защита от zip-бомб, zip-slip и
+  // symlink'ов, что и при деплое; каталог сайта не трогаем, пока архив не
+  // распаковался целиком.
+  const staging = path.join(config.tmpDir, `restore-${site.id}-${Date.now()}`);
+  try {
+    extractZip(zipPath, staging);
+  } catch (err) {
+    rmDirSafe(staging);
+    if (wasRunning) await _start(site, { manual: true });
+    const wrapped = new Error('Распаковка бэкапа не удалась: ' + err.message);
+    throw wrapped;
+  }
+
+  // Двухшаговая подмена, как в _rollback (P-20): падение между шагами не
+  // должно оставлять сайт без каталога.
+  const old = dir + '.restore-old';
+  rmDirSafe(old);
+  try {
+    fs.renameSync(dir, old);
+    fs.renameSync(staging, dir);
+  } catch (err) {
+    rmDirSafe(staging);
+    if (!fs.existsSync(dir) && fs.existsSync(old)) {
+      try { fs.renameSync(old, dir); } catch { /* не смогли вернуть — каталог потерян */ }
+    }
+    if (wasRunning) await _start(site, { manual: true });
+    throw err;
+  }
+  rmDirSafe(old);
+
+  const detected = detectType(dir);
+  site.type = detected.type;
+  site.startCommand = detected.startCommand;
+  // node_modules в бэкап не входит (backups.js): без установки зависимостей
+  // node-сайт после восстановления упал бы на первом же require.
+  if (site.type === 'node') {
+    appendLog(site, `[panel] ${ts()} восстановление: установка зависимостей (node_modules в бэкап не входит)`);
+    const inst = await npmInstall(site, dir);
+    if (!inst.ok) {
+      appendLog(site, `[panel] ${ts()} установка зависимостей после восстановления завершилась с ошибкой — сайт может не запуститься`);
+    }
+  }
+  site.updatedAt = Date.now();
+  store.flush();
+  appendLog(site, `[panel] ${ts()} восстановлено из бэкапа ${path.basename(zipPath)}`);
+  if (wasRunning || site.autoStart) return _start(site, { manual: true });
+  return { ok: true };
+}
+
+function restoreBackup(site, zipPath) {
+  return withSiteLock(site.id, () => _restoreBackup(site, zipPath));
+}
+
 /* ---------- Загрузка / удаление ---------- */
 
 async function boot() {
@@ -1603,6 +1667,7 @@ module.exports = {
   validateSubdir,
   assertInside,
   rollback,
+  restoreBackup,
   boot,
   removeSite,
   isRunning,

@@ -20,6 +20,7 @@
   перезапускаться бесконечно; автозапуск при старте панели; обновление новой версией zip
   с сохранением бэкапа и откатом одной кнопкой.
 - **Мониторинг** — health-check каждые 30 секунд с историей проверок, память процесса, PID, аптайм; просмотр логов сайта (stdout+stderr) с автообновлением.
+- **Бэкапы** — полная копия каталога сайта в zip по расписанию (интервал, ротация «хранить N копий») или вручную; восстановление, скачивание и удаление копий из интерфейса; `node_modules` в бэкап не входит, при восстановлении зависимости ставятся заново.
 - **Админ-панель** — веб-интерфейс на русском, страница входа с сессией в HttpOnly-cookie (плюс HTTP Basic для API и скриптов), тёмная/светлая темы, веб-терминал, смена логина/пароля.
 
 ## Быстрый старт
@@ -44,7 +45,9 @@ PANEL_HTTP_PORT=8080 PANEL_HTTPS_PORT=8443 PANEL_ADMIN_PORT=3000 npm start
 `PANEL_DATA_DIR`, `PANEL_LE_EMAIL`, `PANEL_LE_STAGING`, `PANEL_LE_RENEW_DAYS`, `PANEL_UPLOAD_MAX_MB`,
 `PANEL_INTERNAL_PORT_FROM` (внутренние порты node-приложений, по умолчанию с 10000),
 `PANEL_RESTART_MAX_ATTEMPTS` (5), `PANEL_RESTART_STABLE_SEC` (60), `PANEL_RESTART_COOLDOWN_MIN` (10),
-`PANEL_INSTALL_TIMEOUT_MIN` (10), `PANEL_MAX_UNCOMPRESSED_MB` (2048), `PANEL_MAX_ZIP_ENTRIES` (50000).
+`PANEL_INSTALL_TIMEOUT_MIN` (10), `PANEL_MAX_UNCOMPRESSED_MB` (2048), `PANEL_MAX_ZIP_ENTRIES` (50000),
+`PANEL_BACKUPS` (1; `0` выключает плановые бэкапы), `PANEL_BACKUP_CHECK_SEC` (60),
+`PANEL_BACKUP_MAX_MB` (512 — потолок размера сайта, упаковываемого в бэкап).
 
 ## Тесты
 
@@ -191,6 +194,7 @@ WantedBy=multi-user.target
 | `sites/<id>/`     | Файлы сайтов; рядом `<id>.backup` — прошлый деплой |
 | `certs/<id>/`     | `privkey.pem`, `fullchain.pem`                    |
 | `logs/<id>.log`   | stdout/stderr сайтов (ротация)                    |
+| `backups/<id>/`   | Бэкапы сайтов: `<метка>.zip` + `<метка>.zip.json` (метаданные) |
 | `acme/`           | Ключи аккаунтов Let's Encrypt                     |
 
 ## Доступ к панели
@@ -225,6 +229,12 @@ HTTP Basic при этом продолжает работать — для API,
 | POST   | `/api/sites/:id/rollback` | Откат к предыдущей версии |
 | GET    | `/api/sites/:id/logs?lines=200` | Хвост лога |
 | GET    | `/api/sites/:id/health` | История health-проверок |
+| GET    | `/api/sites/:id/backups` | Список бэкапов + расписание |
+| PUT    | `/api/sites/:id/backups/schedule` | Расписание: `{enabled, intervalHours, keep}` |
+| POST   | `/api/sites/:id/backups` | Создать бэкап сейчас |
+| POST   | `/api/sites/:id/backups/:name/restore` | Восстановить из бэкапа |
+| GET    | `/api/sites/:id/backups/:name/download` | Скачать бэкап (zip) |
+| DELETE | `/api/sites/:id/backups/:name` | Удалить бэкап |
 | POST   | `/api/sites/:id/domains` | Привязать домен `{"domain": "..."}` |
 | DELETE | `/api/sites/:id/domains/:domain` | Отвязать домен |
 | POST   | `/api/sites/:id/ssl/issue` | Выпуск LE `{"domains":[], "email":"", "staging":bool}` |

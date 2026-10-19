@@ -157,6 +157,25 @@
     </div>
   </div>
 
+  <!-- Модальное окно: расписание бэкапов -->
+  <div class="modal-backdrop hidden" id="backupModal">
+    <div class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="backupModalTitle">
+      <h2 id="backupModalTitle">Расписание бэкапов</h2>
+      <label class="checkbox"><input type="checkbox" id="backupEnabled"> Создавать бэкапы по расписанию</label>
+      <label>Интервал, часов
+        <input type="number" id="backupInterval" min="1" step="1" value="24" aria-label="Интервал между бэкапами в часах">
+      </label>
+      <label>Хранить копий
+        <input type="number" id="backupKeep" min="1" max="100" step="1" value="5" aria-label="Сколько последних копий хранить">
+      </label>
+      <p class="hint">Плановый бэкап пропускается, если каталог сайта пуст, а ошибка (например, мало места на диске) будет видна в карточке сайта. <code>node_modules</code> в бэкап не входит — зависимости ставятся заново при восстановлении.</p>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-close>Отмена</button>
+        <button type="button" class="btn btn-primary" id="backupModalSave">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toasts" role="status" aria-live="polite"></div>
 
   <script src="/vendor/xterm.js"></script>

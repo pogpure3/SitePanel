@@ -8,6 +8,126 @@
 
 ---
 
+## 2026-10-19 — Плановые бэкапы сайтов (по образцу ispmanager); выкладка на panel_test
+
+**Запрос.** «Используй https://github.com/morluto/rea и скопируй функции
+https://www.ispmanager.com/about в нашу панель, тестировать можно на тестовом
+стенде». После уточнения объёма пользователь выбрал: только **плановые бэкапы**
+(без cron-планировщика и расширений файл-менеджера), хранение — **локально на
+сервере** + скачивание zip.
+
+**Диагностика.**
+- REA (`morluto/rea`) — CLI/MCP «reverse engineer anything» (`rea-agents` 6.7.0,
+  npm, MIT). `npx rea-agents doctor`: node 24.21.0 и win32 healthy; движки
+  Hopper/Ghidra/IDA/JADX отсутствуют — для анализа сайтов не нужны. Полный
+  MCP-сетап (`npx rea-agents setup`) пишет в `~/.zcode/cli/config.json` и требует
+  перезапуска клиента — НЕ выполнялся; использован CLI-режим через npx.
+  Захвачены HAR публичных страниц ispmanager.com (`/about`, `/backups`) через
+  Playwright-chromium; `npx rea-agents inspect-web-network-capture backups.har har`
+  разобрал захват (43 записи, HTTP 200) — подтверждена схема бэкапов ispmanager:
+  полный + дифференциальный по расписанию, ротация, восстановление из панели,
+  хранилища локально/FTP/Dropbox/S3/Google Drive. Демо-панель ispmanager — за
+  формой с email; регистрация не выполнялась. Копировались только идеи функций,
+  код и тексты ispmanager не использовались.
+- Файловый менеджер в панели уже есть (`src/admin/routes.js`, секция
+  «Файловый менеджер»: list/read/write/mkdir/rename/delete/upload+extract) —
+  эта функция ispmanager в панели была. PHP-версии, DNS (нужен BIND), локальные
+  MySQL/PostgreSQL и конфиг веб-сервера к Node-панели неприменимы. Из
+  применимого отсутствовали плановые бэкапы: был только бэкап прошлого деплоя
+  (`<id>.backup`) с откатом одной кнопкой.
+- `src/sites/lock.js`: повторный вход в `withSiteLock` отклоняется — поэтому
+  восстановление (нужны внутренние `_stop`/`_start`) реализовано в
+  `src/sites/manager.js`, а не в отдельном модуле.
+
+**Изменения.**
+- `src/config.js`: `backupsDir` (`data/backups`), `backupsEnabled`
+  (`PANEL_BACKUPS`, по умолчанию 1), `backupCheckSec` (`PANEL_BACKUP_CHECK_SEC`,
+  60), `backupMaxSiteMb` (`PANEL_BACKUP_MAX_MB`, 512); каталог добавлен в
+  `ensureDirs()`.
+- `src/store.js`: `validateSite()` — дефолт и коэрция `site.backupSchedule`
+  `{enabled:false, intervalHours:24, keep:5, lastRunAt:null, lastError:null}`
+  (интервал 0.05..8760 ч, keep 1..100); без bump версии схемы.
+- `src/sites/backups.js` — НОВЫЙ: `createBackup` (zip каталога сайта под
+  `withSiteLock`; `node_modules` и симлинки отсекаются; лимит
+  `PANEL_BACKUP_MAX_MB`; проверка свободного места (`fs.statfs`, при недоступности
+  проверка пропускается); запись во временный файл в `data/tmp` + rename;
+  sidecar-метаданные `<имя>.zip.json`), `listBackups` (с диска), `deleteBackup`,
+  `prune`, `removeAll`, `summary`, `normalizeScheduleInput`, планировщик
+  `start()/tick()/dueSites()` — первый тик сразу после старта, затем раз в
+  `PANEL_BACKUP_CHECK_SEC`; защита от постановки дублей (`RUNNING` set); ошибка
+  планового бэкапа → `lastError` + Telegram-алерт через `alerts.send`.
+- `src/sites/manager.js`: `_restoreBackup` + `restoreBackup` (экспорт): стоп
+  сайта → распаковка `extractZip` (та же защита от zip-бомб/zip-slip, что при
+  деплое) в staging `data/tmp/restore-*` → двухшаговая подмена каталога
+  (`<id>.restore-old`, как в `_rollback`, P-20) → `detectType` → для node-сайтов
+  `npmInstall` (node_modules в бэкапе нет) → старт; при неудаче распаковки/подмены
+  сайт возвращается в прежнее состояние.
+- `src/index.js`: `backups.start()` после `manager.boot()` (рядом с
+  `alerts.start()`); выключатель — внутри `backups.start()`.
+- `src/admin/routes.js`: секция «Бэкапы» — `GET /api/sites/:id/backups`,
+  `PUT /api/sites/:id/backups/schedule`, `POST /api/sites/:id/backups`,
+  `POST /api/sites/:id/backups/:name/restore`, `GET .../download`,
+  `DELETE .../:name`; `serializeSite` отдаёт `backupSchedule`; сайтам при
+  создании проставляется дефолт расписания; `DELETE /api/sites/:id` удаляет и
+  `data/backups/<id>` (`backups.removeAll`). Имена бэкапов валидируются
+  `^\d{8}-\d{6}\.zip$` (400 на мусор, 404 на несуществующий).
+- UI: `src/admin/public/app.js` — карточка «Бэкапы» в карточке сайта
+  (состояние расписания, последний бэкап, `lastError`), страница
+  `#/sites/:id/backups` (таблица: метка/размер/триггер/дата; кнопки создать /
+  скачать / восстановить с подтверждением / удалить с подтверждением), модалка
+  расписания; hash-роутинг, CRUMBS, syncShell, patchDetail.
+  `src/admin/public/index.html` — модалка `#backupModal` (role=dialog,
+  aria-modal). `style.css` не менялся (переиспользованы `.panel`, `.fm-table`,
+  `.fm-bar`, `.badge`).
+- `tests/backups.test.js` — НОВЫЙ: 9 тестов (ручной бэкап+sidecar+скачивание,
+  восстановление статики и node-сайта с переустановкой зависимостей, ротация
+  keep=2, валидация расписания и имён, планировщик с `PANEL_BACKUP_CHECK_SEC=1`,
+  `PANEL_BACKUPS=0`, удаление бэкапов с сайтом, юнит `dueSites`).
+- Документация: `README.md` (возможности, API-таблица, env, каталог data/),
+  `CHANGELOG.md` ([Unreleased] → Добавлено).
+- Новых npm-зависимостей нет (adm-zip уже в стеке).
+
+**Выкладка — panel_test.** Бэкап кода ДО:
+`/root/sitepanel-code-backup-20261019-204335.tar.gz` (tar src tests package.json
+из `/opt/sitepanel`). Заменены 9 файлов: `src/config.js`, `src/store.js`,
+`src/index.js`, `src/sites/backups.js` (новый), `src/sites/manager.js`,
+`src/admin/routes.js`, `src/admin/public/app.js`,
+`src/admin/public/index.html`, `tests/backups.test.js` (новый). `node --check`
+всех 8 js — без ошибок; md5 `backups.js`/`app.js` локально и на стенде совпали.
+`npm install` не требовался. `systemctl restart sitepanel` → active.
+Примечание: во время проверки (~20:52 МСК) SSH-сессии к стенду оборвались
+(`Connection reset by peer`), переподключение прошло без последствий — сбой
+сетевой, стенд не перезагружался (аптайм процессов непрерывный).
+
+**Проверка.**
+- Локально (Windows): `npm run lint` — чисто; `npm test`: 213 тестов — 197 pass,
+  3 fail, 13 skip. Все 3 падения — предсуществующие сбои Windows-окружения
+  (T-32, T-43, T-44), воспроизводятся на чистом дереве 4be6bda (`git stash` →
+  тот же результат) и не связаны с задачей. `tests/ui.test.js` +
+  `tests/ui-browser.test.js` (Playwright, реальный браузер): 12 pass.
+- На стенде: `/healthz` → `{"ok":true}`; `/login` → 200; `/api/system` без
+  пароля → 401; `pqr.evil-mesh.ru` через прокси → 301 (редирект на HTTPS).
+  `node --test tests/backups.test.js` на стенде: **9 pass, 0 fail**.
+- UI в браузере (черновой экземпляр панели на стенде: `PANEL_NO_AUTH=1`,
+  админ-порт 3190, `PANEL_DATA_DIR=/tmp/sp-ui-selftest`, `PANEL_BACKUP_CHECK_SEC=1`,
+  доступ через `ssh -L 13190`; инстанс и каталог снесены после проверки):
+  карточка «Бэкапы» на месте; «Создать сейчас» → бэкап 249 Б, «Последний бэкап»
+  в карточке; страница бэкапов: таблица с триггером «Вручную» и ссылками;
+  модалка расписания: включено, интервал 1 ч, хранить 3 — сохранилось;
+  восстановление по «↩» с диалогом подтверждения → «Восстановлено из бэкапа»,
+  сайт вернулся в «Работает»; скриншот снят, вёрстка в стиле панели.
+- Полный набор на стенде (`node tests/run.js`): **213 тестов — 208 pass,
+  0 fail, 5 skip, exit 0** (baseline до задачи: 196 тестов, 191 pass, 5 skip).
+
+**Осталось.**
+- На panel_beget (продакт-стенд) функция НЕ выкладывалась — по условию задачи
+  тестировали на panel_test; выкладка на прод — отдельным решением.
+- Регистрация REA как MCP-сервера в ZCode (`npx rea-agents setup`, правка
+  `~/.zcode/cli/config.json` + перезапуск клиента) — по желанию, отдельно.
+- Бэкапы пишутся на тот же диск, что и `data/`: от полного затирания при
+  отказе диска не спасают; внешние хранилища (S3/FTP, как в ispmanager) —
+  потенциальное развитие.
+
 ## 2026-10-14 — Перезагрузка panel_beget: загружено ядро 7.0.0-38
 
 **Запрос.** «Перезагружай продакт» — ребут panel_beget, ждавший нового ядра

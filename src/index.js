@@ -14,6 +14,7 @@ const monitor = require('./monitor');
 const dashboard = require('./dashboard');
 const alerts = require('./alerts');
 const manager = require('./sites/manager');
+const backups = require('./sites/backups');
 const { createServers, listenServers, securityHeaders } = require('./httpserver');
 const adminRoutes = require('./admin/routes');
 const terminal = require('./admin/terminal');
@@ -143,6 +144,9 @@ async function main() {
   monitor.start();
   dashboard.start();
   alerts.start();
+  // Плановые бэкапы после boot(): тик идёт сразу и берёт блокировки сайтов —
+  // они должны быть свободны, как и для первого тика монитора (M-01).
+  backups.start();
   acme.startRenewalLoop();
 
   // Почасовая уборка data/tmp (SP-14): чистка при старте не спасает от

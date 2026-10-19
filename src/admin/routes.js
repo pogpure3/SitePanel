@@ -12,6 +12,7 @@ const { config } = require('../config');
 const store = require('../store');
 const auth = require('../auth');
 const manager = require('../sites/manager');
+const backups = require('../sites/backups');
 const certs = require('../ssl/certs');
 const acme = require('../ssl/acme');
 const monitor = require('../monitor');
@@ -125,6 +126,7 @@ function serializeSite(site, withStats = true) {
     gitBranch: site.gitBranch || null,
     gitSubdir: site.gitSubdir || null,
     ssl: site.ssl || { status: 'none' },
+    backupSchedule: backups.scheduleOf(site),
     // health — телеметрия монитора из памяти, не поле записи (M-02).
     health: monitor.healthFor(site.id),
     // Диагностика цикла перезапусков: attempts — текущий бэкофф, crashLoop — лимит исчерпан.
@@ -169,6 +171,9 @@ router.post('/sites', upload.single('file'), wrap(async (req, res) => {
     startCommand: null,
     autoStart: req.body.autoStart === 'true' || req.body.autoStart === '1',
     ssl: { provider: null, status: 'none' },
+    // Расписание бэкапов: validateSite проставит дефолт только при чтении db.json,
+    // поэтому у свежесозданного сайта поле нужно сразу (до перезапуска панели).
+    backupSchedule: { ...backups.DEFAULT_SCHEDULE },
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -205,6 +210,9 @@ router.post('/sites/git', wrap(async (req, res) => {
     startCommand: null,
     autoStart: !!req.body.autoStart,
     ssl: { provider: null, status: 'none' },
+    // Расписание бэкапов: validateSite проставит дефолт только при чтении db.json,
+    // поэтому у свежесозданного сайта поле нужно сразу (до перезапуска панели).
+    backupSchedule: { ...backups.DEFAULT_SCHEDULE },
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -272,6 +280,9 @@ router.delete('/sites/:id', wrap(async (req, res) => {
   const site = findSite(req);
   await manager.removeSite(site);
   certs.removeCertFiles(site);
+  // Бэкапы сайта переживать удаление не должны: сироты в data/backups/<id>
+  // занимали бы диск вечно.
+  try { backups.removeAll(site.id); } catch { /* уже нет — не критично */ }
   // История проверок и кэш статистики в памяти не должны переживать удаление (M-03).
   monitor.forgetSite(site.id);
   store.state.sites = store.state.sites.filter((s) => s.id !== site.id);
@@ -671,6 +682,55 @@ router.post('/sites/:id/files/upload', uploadAny.single('file'), wrap(async (req
     }
   });
   res.json({ ok: true, extracted });
+}));
+
+/* ---------- Бэкапы ---------- */
+
+// Список бэкапов и расписание. Форма `const x = f(); res.json(x)`, а не
+// `res.json(f())`: lint-тест (routes-lint) считает вызов вида res.json(x.y())
+// подозрением на необработанный промис.
+router.get('/sites/:id/backups', wrap(async (req, res) => {
+  const site = findSite(req);
+  const summary = backups.summary(site);
+  res.json(summary);
+}));
+
+// Расписание — частичное обновление: переданные поля меняются, остальные остаются.
+router.put('/sites/:id/backups/schedule', wrap(async (req, res) => {
+  const site = findSite(req);
+  site.backupSchedule = backups.normalizeScheduleInput(site, req.body || {});
+  // flush(), а не save(): ошибка записи должна вернуть 5xx, а не «ок» через 250 мс.
+  store.flush();
+  res.json({ ok: true, schedule: site.backupSchedule });
+}));
+
+// Создать бэкап сейчас. Блокирует сайт на время упаковки (секунды для
+// небольших сайтов); таймаут клиента в интерфейсе — 5 минут.
+router.post('/sites/:id/backups', wrap(async (req, res) => {
+  const site = findSite(req);
+  const backup = await backups.createBackup(site, 'manual');
+  res.json({ ok: true, backup });
+}));
+
+router.post('/sites/:id/backups/:name/restore', wrap(async (req, res) => {
+  const site = findSite(req);
+  const zipPath = backups.resolveBackupPath(site, req.params.name);
+  // restoreBackup сам остановит/поднимет сайт: {ok:false} здесь значит
+  // «восстановлено, но сайт не запустился» — интерфейс покажет ошибку.
+  const r = await manager.restoreBackup(site, zipPath);
+  res.json(r);
+}));
+
+router.get('/sites/:id/backups/:name/download', wrap(async (req, res) => {
+  const site = findSite(req);
+  const zipPath = backups.resolveBackupPath(site, req.params.name);
+  res.download(zipPath);
+}));
+
+router.delete('/sites/:id/backups/:name', wrap(async (req, res) => {
+  const site = findSite(req);
+  const r = await backups.deleteBackup(site, req.params.name);
+  res.json(r);
 }));
 
 /* ---------- утилиты ---------- */

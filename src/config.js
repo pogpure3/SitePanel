@@ -13,6 +13,7 @@ const config = {
   certsDir: path.join(DATA_DIR, 'certs'),
   logsDir: path.join(DATA_DIR, 'logs'),
   tmpDir: path.join(DATA_DIR, 'tmp'),
+  backupsDir: path.join(DATA_DIR, 'backups'),
   dbFile: path.join(DATA_DIR, 'db.json'),
   authFile: path.join(DATA_DIR, 'auth.json'),
   configFile: path.join(DATA_DIR, 'config.json'),
@@ -83,6 +84,16 @@ const config = {
   // Период health-check тика монитора. Переменная нужна тестам (ждать 30 с
   // нельзя) и тем, кто хочет чаще/реже; нижняя граница защищает от DDoS самого себя.
   monitorTickMs: posInt(process.env.PANEL_MONITOR_TICK_MS, 30000, 250, 600000),
+
+  // Плановые бэкапы сайтов. PANEL_BACKUPS=0 выключает функцию целиком —
+  // по той же схеме, что PANEL_TERMINAL=0 у веб-терминала.
+  backupsEnabled: bool(process.env.PANEL_BACKUPS, true),
+  // Период опроса расписания: нижняя граница — для тестов, ждать час нельзя.
+  backupCheckSec: posInt(process.env.PANEL_BACKUP_CHECK_SEC, 60, 1, 86400),
+  // Потолок размера сайта, упаковываемого в бэкап. adm-zip держит архив в
+  // памяти: без своего лимита бэкап большого сайта уронил бы панель по OOM,
+  // а общий maxUncompressedMb (2 ГБ по умолчанию) слишком велик для памяти.
+  backupMaxSiteMb: posInt(process.env.PANEL_BACKUP_MAX_MB, 512, 1, 16384),
 };
 
 // Пользовательский config.json перекрывает значения по умолчанию.
@@ -171,7 +182,7 @@ function ensureDirs() {
   // первого hardenDataDir() (следующий вызов в src/index.js:23) будущие
   // auth.json/db.json/certs читаемы другим локальным пользователям, а если
   // процесс упадёт между вызовами — останутся такими навсегда (H-16).
-  for (const dir of [DATA_DIR, config.sitesDir, config.certsDir, config.logsDir, config.tmpDir, config.acmeDir]) {
+  for (const dir of [DATA_DIR, config.sitesDir, config.certsDir, config.logsDir, config.tmpDir, config.acmeDir, config.backupsDir]) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
 }

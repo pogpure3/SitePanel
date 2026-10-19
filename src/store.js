@@ -103,6 +103,28 @@ function validateSite(raw) {
   if (typeof site.autoStart !== 'boolean') site.autoStart = false;
   if (typeof site.status !== 'string') site.status = 'stopped';
 
+  // Расписание бэкапов (по образцу Backups ispmanager). Дефолт выключен:
+  // бэкапы без ведома администратора занимали бы диск сами по себе.
+  if (!site.backupSchedule || typeof site.backupSchedule !== 'object' || Array.isArray(site.backupSchedule)) {
+    site.backupSchedule = { enabled: false, intervalHours: 24, keep: 5, lastRunAt: null, lastError: null };
+  } else {
+    const s = site.backupSchedule;
+    const norm = {
+      enabled: s.enabled === true,
+      intervalHours: Number(s.intervalHours),
+      keep: Number.isInteger(Number(s.keep)) ? Number(s.keep) : 5,
+      lastRunAt: Number(s.lastRunAt) || null,
+      lastError: typeof s.lastError === 'string' ? s.lastError : null,
+    };
+    // Интервал дробный не запрещён: 0.1 ч = 6 минут — режим для тестов и
+    // «перед деплоем прогнать вручную»; меньше 0.05 ч (3 мин) смысла нет.
+    if (!Number.isFinite(norm.intervalHours) || norm.intervalHours < 0.05 || norm.intervalHours > 8760) {
+      norm.intervalHours = 24;
+    }
+    if (norm.keep < 1 || norm.keep > 100) norm.keep = 5;
+    site.backupSchedule = norm;
+  }
+
   // Телеметрия (health/fails) живёт в памяти монитора, а не в реестре (M-02):
   // ключи из старых db.json выбрасываются, чтобы не возвращались на диск.
   delete site.health;
