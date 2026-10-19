@@ -8,6 +8,55 @@
 
 ---
 
+## 2026-10-19 — Деплой-файлы: deploy/Dockerfile + deploy/docker-compose.yml
+
+**Запрос.** «Добавь Деплой: deploy/Dockerfile + docker-compose.yml» — Docker-развёртывание панели.
+
+**Диагностика.**
+- `package.json`: `node-pty` — в `optionalDependencies` (нативный модуль), прочие
+  зависимости чистый JS; `engines: node >=20` → база `node:22-alpine`.
+  `npm ci --omit=dev --omit=optional` даёт установку без компилятора.
+- Веб-терминал (`src/admin/terminal.js`): без node-pty fallback — `script -qfc`,
+  в alpine `script` входит в `util-linux` (добавлен apk-пакетом).
+- Healthcheck-эндпоинт `/healthz` существует и не требует авторизации
+  (`src/index.js`), Node 22 умеет `fetch` — HEALTHCHECK без curl в образе.
+- Порты по умолчанию из `src/config.js`: 80/443/3000 — совпадают с EXPOSE и
+  `ports` compose; `PANEL_DATA_DIR=/app/data` — том `panel-data`.
+- Docker отсутствует и локально, и на panel_beget/panel_test
+  (`docker --version` — нет) — сборка образа в этой задаче не выполнялась.
+
+**Изменения.**
+- `deploy/Dockerfile` — НОВЫЙ: node:22-alpine; `apk add util-linux` (для
+  `script`); слой зависимостей `npm ci --omit=dev --omit=optional` (кэш сборки
+  не инвалидируется кодом); `COPY src ./src`; `PANEL_DATA_DIR=/app/data`;
+  `mkdir data && chown node:node` (named volume наследует владельца при первой
+  инициализации); `USER node`; EXPOSE 80/443/3000; HEALTHCHECK на `/healthz`;
+  CMD `node src/index.js`.
+- `deploy/docker-compose.yml` — НОВЫЙ: build context `..` + dockerfile
+  `deploy/Dockerfile`; `restart: unless-stopped`; `cap_add: NET_BIND_SERVICE`
+  (80/443 под пользователем node без root); `ports` 80, 443 и админка только на
+  `127.0.0.1:3000`; env `TZ=Europe/Moscow`, `PANEL_LE_EMAIL`,
+  `PANEL_LE_STAGING` (пробрасываются из окружения); том `panel-data:/app/data`.
+- `.dockerignore` — НОВЫЙ: node_modules, data (секреты), tests, scripts, .git,
+  .github, .vps, .zcode, .design-audit, *.md; каталог deploy НЕ исключён
+  (legacy-билдер требует Dockerfile внутри контекста).
+- `README.md`: раздел «Запуск в Docker» (порты, том, пароль из
+  `docker logs sitepanel`, cap NET_BIND_SERVICE, терминал в режиме `script`).
+- `CHANGELOG.md`: [Unreleased] → Добавлено.
+- Стенды не трогались (панель там живёт в systemd, docker на них не ставился).
+
+**Проверка.**
+- Проверено: YAML compose валиден (`npx js-yaml deploy/docker-compose.yml`
+  — без ошибок); соответствие портов/env дефолтам `src/config.js`;
+  `package-lock.json` присутствует (`npm ci` работоспособен).
+- Не проверено (честно): сборка образа и запуск контейнера — Docker недоступен
+  ни локально, ни на стендах. Первую реальную сборку стоит прогонять командой
+  `docker compose -f deploy/docker-compose.yml up -d --build` и смотреть
+  `docker logs sitepanel` (пароль админа) + `curl /healthz`.
+
+**Осталось.** Пробная сборка образа, когда появится Docker (локально или на
+стенде); при желании — CI-шаг `docker build` в `.github/workflows/ci.yml`.
+
 ## 2026-10-19 — Выкладка плановых бэкапов на прод panel_beget
 
 **Запрос.** «Установи на прод» — выкладка функции плановых бэкапов (коммит

@@ -1,0 +1,40 @@
+# SitePanel в Docker. Запуск из каталога deploy/:
+#   PANEL_LE_EMAIL=admin@example.com docker compose up -d --build
+# Пароль администратора печатается в журнал контейнера при первом запуске:
+#   docker logs sitepanel
+#
+# Данные (реестр, сайты, сертификаты, логи, бэкапы) живут в томе panel-data —
+# переживают пересоздание контейнера. Админ-порт проброшен только на 127.0.0.1:
+# наружу его отдаёт реверс-прокси на хосте, как на стендах проекта.
+
+services:
+  panel:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: sitepanel:latest
+    container_name: sitepanel
+    restart: unless-stopped
+    # Непривилегированный пользователь образа (USER node) с этой возможностью
+    # ядра может занять порты 80/443.
+    cap_add:
+      - NET_BIND_SERVICE
+    ports:
+      - "80:80"                # HTTP: ACME HTTP-01 challenge + редирект на HTTPS
+      - "443:443"              # HTTPS: SNI-маршрутизация по сертификатам сайтов
+      - "127.0.0.1:3000:3000"  # админка — только с самого хоста
+    environment:
+      TZ: Europe/Moscow
+      # Let's Encrypt: без PANEL_LE_EMAIL выпуск настраивается позже в панели.
+      PANEL_LE_EMAIL: ${PANEL_LE_EMAIL:-}
+      # 1 — тестовый (staging) ACME на время отладки, чтобы не упереться в лимиты.
+      PANEL_LE_STAGING: ${PANEL_LE_STAGING:-0}
+      # При необходимости порты меняются и здесь, и в ports:
+      # PANEL_ADMIN_PORT: 3000
+      # PANEL_HTTP_PORT: 80
+      # PANEL_HTTPS_PORT: 443
+    volumes:
+      - panel-data:/app/data
+
+volumes:
+  panel-data:

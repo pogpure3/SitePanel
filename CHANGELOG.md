@@ -189,6 +189,14 @@
 
 ### Добавлено
 
+- **Развёртывание в Docker** (`deploy/Dockerfile` + `deploy/docker-compose.yml`,
+  `.dockerignore`). Образ на node:22-alpine: зависимости `npm ci
+  --omit=dev --omit=optional` отдельным слоем, панель работает под
+  непривилегированным пользователем `node`, порты 80/443 открывает через
+  `cap_add: NET_BIND_SERVICE`; `HEALTHCHECK` на `/healthz`. Данные — в томе
+  `panel-data` (`/app/data`); админ-порт в compose проброшен только на
+  `127.0.0.1` хоста. `node-pty` в образ не входит (веб-терминал — режим
+  `script` из util-linux).
 - **Плановые бэкапы сайтов** (по образцу раздела Backups ispmanager). Полная
   копия каталога сайта в zip (`data/backups/<id>/<метка времени>.zip` с
   json-метаданными рядом); расписание на сайт — интервал в часах и ротация

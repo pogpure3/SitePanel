@@ -1,0 +1,15 @@
+# Контекст сборки — корень репозитория (см. deploy/docker-compose.yml).
+# В образ попадают только package.json, package-lock.json и src/ (COPY в
+# deploy/Dockerfile), но контекст целиком уходит демону при build: — тяжёлое
+# и секретное в контекст не тащим.
+node_modules
+data
+tests
+scripts
+.git
+.github
+.vps
+.zcode
+.design-audit
+*.md
+eslint.config.js
