@@ -94,6 +94,11 @@ const config = {
   // памяти: без своего лимита бэкап большого сайта уронил бы панель по OOM,
   // а общий maxUncompressedMb (2 ГБ по умолчанию) слишком велик для памяти.
   backupMaxSiteMb: posInt(process.env.PANEL_BACKUP_MAX_MB, 512, 1, 16384),
+
+  // Docker-сайты: бюджет на docker build / compose build. Сборка с npm/pip
+  // внутри может идти долго; зависший билд не должен держать блокировку сайта
+  // вечно (та же логика, что PANEL_INSTALL_TIMEOUT_MIN у node-сайтов).
+  dockerBuildTimeoutMin: posInt(process.env.PANEL_DOCKER_BUILD_TIMEOUT_MIN, 10, 1, 1440),
 };
 
 // Пользовательский config.json перекрывает значения по умолчанию.

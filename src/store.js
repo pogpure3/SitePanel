@@ -15,7 +15,9 @@ const secure = require('./securefile');
 //   2. Ошибка записи (ENOSPC, EACCES, read-only ФС) не должна выглядеть как успех:
 //      иначе API отвечает `{ok:true}` за изменения, которых на диске нет (SP-06).
 
-const SITE_TYPES = new Set(['node', 'static']);
+const SITE_TYPES = new Set(['node', 'static', 'docker']);
+// Чем запускается Docker-сайт: одиночный Dockerfile или docker-compose-файл.
+const DOCKER_FLAVORS = new Set(['dockerfile', 'compose']);
 
 // Версия схемы состояния (SP-15). Файл без version — легаси до введения версий;
 // файл с БОЛЬШЕЙ версией читается как есть с предупреждением, чтобы откат панели
@@ -102,6 +104,19 @@ function validateSite(raw) {
 
   if (typeof site.autoStart !== 'boolean') site.autoStart = false;
   if (typeof site.status !== 'string') site.status = 'stopped';
+
+  // Docker-сайт: containerPort — порт приложения ВНУТРИ контейнера (панель
+  // публикует его на 127.0.0.1:<port>); dockerFlavor — чем запускается проект.
+  // Мусор вместо числа обнуляется: без containerPort деплой детектирует порт
+  // из EXPOSE/ports, а до этого публиковать нечего.
+  if (site.containerPort === null || site.containerPort === undefined || site.containerPort === '') {
+    site.containerPort = null;
+  } else {
+    const cp = Number(site.containerPort);
+    if (Number.isInteger(cp) && cp > 0 && cp < 65536) site.containerPort = cp;
+    else site.containerPort = null;
+  }
+  site.dockerFlavor = DOCKER_FLAVORS.has(site.dockerFlavor) ? site.dockerFlavor : null;
 
   // Расписание бэкапов (по образцу Backups ispmanager). Дефолт выключен:
   // бэкапы без ведома администратора занимали бы диск сами по себе.

@@ -8,6 +8,117 @@
 
 ---
 
+## 2026-10-20 — Docker-сайты: деплой проектов через Dockerfile и docker-compose.yml
+
+**Запрос.** «Добавь возможность добавлять сайты-проекты в панель через
+Dockerfile + docker-compose.yml». Уточнено: поддерживать оба формата
+(Dockerfile и compose), источники — zip и Git.
+
+**Диагностика.** Разведка по всем местам, где тип сайта (`node`/`static`)
+имеет значение (детект, деплой, старт/стоп, монитор, прокси, UI, тесты):
+- `detectType` (manager.js) проверял package.json — dockerized node-проект
+  определился бы как node; Dockerfile/compose нужно проверять раньше.
+- `finalizeDeploy` выдавал порт только node-сайтам.
+- `httpserver.route()` fallthrough: неизвестный тип уходил в `serveStatic` —
+  каталог docker-сайта (Dockerfile, исходники, секреты) УТЕК бы как статика.
+- Остановка: `ensurePortFreed` видит `docker-proxy` как чужой процесс
+  (cmdline-эвристика не совпадает) — убивать им нельзя; kill docker CLI не
+  останавливает контейнер. Нужен явный `docker stop`/`compose stop`.
+- Контейнер переживает панель: `boot()` мог бы двоить; `adoptOrphans` уже
+  скипал не-node; при остановке панели docker-сайты не глушим (restart policy).
+- Монитор: docker-тип попадал в else → health всегда down; stats невозможны
+  (нет child-процесса).
+
+**Изменения.**
+- `src/store.js`: `SITE_TYPES` + `docker`; поля `containerPort` (int|null,
+  мусор обнуляется) и `dockerFlavor` (`dockerfile`|`compose`|null); `validateSite`
+  экспортирована (была) — тесты зовут напрямую.
+- `src/sites/manager.js`: блок «Docker-сайты» — `detectDockerFlavor`,
+  `detectContainerPort` (EXPOSE / короткий `ports` compose; длинный синтаксис
+  не парсим), `dockerProjectName/ImageName` (`sitepanel-<id>`),
+  `dockerRunLogged` (runCommand: лог в sitelog, таймаут), `execDockerQuiet`
+  (inspect/version без лога), `dockerContainerExists/Running`,
+  `assertDockerAvailable` (внятная ошибка без docker), `dockerBuild`,
+  `dockerRunCmd` (`docker run -d --restart unless-stopped -p 127.0.0.1:<port>:<cp>
+  -e PORT/<HOST>/SITE_ID`), `writeComposeOverride` + `composeBaseArgs`
+  (см. «найдено» ниже), `dockerRecreate`, `dockerRemoveAll` (down --rmi local
+  --volumes с fallback по label / rm -f + rmi). `detectType` — docker раньше
+  package.json. `finalizeDeploy`: порт для docker, containerPort
+  (пользователь → EXPOSE/ports → 3000), после свапа: override →
+  assertDockerAvailable → build → recreate (ошибка билда → штатный откат
+  .backup). `_startDocker`/`_stopDocker` (ветки в `_start`/`_stop`; stop —
+  явный docker/compose stop + waitPortFree, БЕЗ ensurePortFreed).
+  `_rollback`/`_restoreBackup` для docker: build + recreate (docker start
+  поднял бы контейнер со старым образом). `_removeSite`: dockerRemoveAll.
+  `waitListening`: node|docker. Экспорты detectType/detectDockerFlavor/
+  detectContainerPort/composeFirstService/dockerContainerRunning/
+  dockerProjectName.
+- `src/monitor.js`: HTTP-проверка для docker (как node) + сверка
+  `dockerContainerRunning`: статус running при мёртвом контейнере → crashed.
+- `src/httpserver.js`: `route()` и WS-upgrade — docker проксируется как node.
+- `src/config.js`: `PANEL_DOCKER_BUILD_TIMEOUT_MIN` (10 мин).
+- `src/admin/routes.js`: `serializeSite` + containerPort/dockerFlavor; PATCH
+  `/api/sites/:id` принимает `containerPort` (int 1..65535|null, иначе 400);
+  литералы создаваемых сайтов с полями.
+- `src/admin/public/app.js`: `typeLabel` (Docker в бейджах списка, карточки,
+  toast); строка «Порт контейнера» в Обзоре (только для docker, правка кликом
+  → PATCH); `index.html`: хинт формы добавления про Dockerfile/compose.
+- `tests/docker-sites.test.js` — НОВЫЙ: юнит (приоритет детекта, 4 имени
+  compose-файлов, EXPOSE/ports, длинный синтаксис → null, composeFirstService,
+  валидация полей) + интеграция с реальным docker (скипается без CLI):
+  полный цикл Dockerfile-сайта (деплой → прокси → stop/start → обновление с
+  пересборкой → удаление с чисткой контейнера и образа) и compose-проект.
+- README (раздел «Docker-проект» в требованиях к сайтам, env-таблица),
+  CHANGELOG (Добавлено).
+
+**Найдено при отладке (фиксы до первого зелёного прогона).**
+- Обновление dockerfile-сайта: build создавал новый образ, но `_startDocker`
+  делал `docker start` СТАРОГО контейнера — v2 не проявлялась. Фикс: recreate
+  после билда в деплой-пути.
+- compose-проект без `ports` не публикует порт — прокси не достучался. Фикс:
+  панель генерирует `<compose-файл>.sitepanel-override.yml` в каталоге сайта
+  (`ports: !override ["127.0.0.1:<port>:<cp>"]` для ПЕРВОГО сервиса — публиковать
+  всем сервисам (БД) было бы дырой; `!override` заменяет пользовательский ports,
+  наружные публикации в обход панели невозможны); все compose-команды — с явной
+  парой `-f <main> -f <override>`; override перезаписывается при деплое/старте
+  (если потерялся).
+
+**Выкладка — panel_test.** Бэкап кода ДО:
+`/root/sitepanel-code-backup-20261019-233940.tar.gz`. Заменены 9 файлов
+(src/config.js, src/store.js, src/sites/manager.js, src/monitor.js,
+src/httpserver.js, src/admin/routes.js, src/admin/public/app.js,
+src/admin/public/index.html, tests/docker-sites.test.js); `node --check` всех;
+md5 manager.js и теста совпали; `systemctl restart sitepanel` → active.
+
+**Проверка.**
+- Локально: lint чистый; полный набор 218 тестов — 200 pass, 3 fail
+  (предсозданные Windows-сбои T-32/T-43/T-44, на чистом дереве те же),
+  docker-интеграции корректно скипнулись (docker на Windows-машине нет).
+- На стенде: `tests/docker-sites.test.js` — **6 pass / 0 fail** (интеграции с
+  реальным docker). Полный набор: **219 тестов — 214 pass, 0 fail, 5 skip,
+  exit 0** (первый прогон упал на необновлённом manager.js — см. «найдено»;
+  после фиксов зелёный). Обрывы ssh во время проверок (Connection reset) —
+  сетевые, на стенд не влияли; перезапуски прогонов.
+- Смоук UI в браузере (scratch-панель 3295 на стенде, туннель, NO_AUTH):
+  деплой zip с Dockerfile через API → карточка «Тип: Docker-контейнер»,
+  «Порт контейнера: 3000 → 127.0.0.1:14000 ✎», health ok; PATCH containerPort
+  (валидное → 200, мусор → 400); скриншот снят. Смоук-хозяйство удалено
+  (панель, контейнер, образ, temp).
+- Остатки отладки на стенде вычищены (зависшие диагностические панели убиты,
+  контейнеры/образы `sitepanel-*` удалены, temp-каталоги снесены); основная
+  панель active без перерывов, pqr работает.
+
+**Осталось.**
+- На panel_beget Docker НЕ ставился — docker-сайты там заработают после
+  установки docker (функция в коде уже есть после следующей полной выкладки).
+- Панель в Docker-контейнере (deploy/) НЕ может управлять docker-сайтами
+  (нет docker CLI/socka внутри образа) — при таком способе развёртывания
+  панели docker-деплой отключить или пробросить /var/run/docker.sock
+  (осознанно не делали).
+- compose: поддержан короткий синтаксис `ports` и верхнеуровневые файлы без
+  `includes`; длинный YAML-синтаксис публикуется только через containerPort
+  пользователя.
+
 ## 2026-10-19 — Docker на panel_test + первая сборка образа sitepanel
 
 **Запрос.** «Установи докер на тестовый стенд» — установка Docker на panel_test

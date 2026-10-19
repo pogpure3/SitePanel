@@ -189,6 +189,18 @@
 
 ### Добавлено
 
+- **Docker-сайты: деплой проектов через Dockerfile и docker-compose.yml** (zip и Git).
+  Новый тип сайта `docker`: панель определяет проект по `Dockerfile` или
+  `docker-compose.yml|compose.yaml|compose.yml|docker-compose.yaml` (приоритетнее
+  package.json), собирает образ при деплое (`PANEL_DOCKER_BUILD_TIMEOUT_MIN`) и
+  пересоздаёт контейнеры с префиксом `sitepanel-<id>`. Публикация — только на
+  `127.0.0.1:<выделенный порт>:<порт из EXPOSE/ports, иначе 3000>` (для compose
+  панель генерирует override с `!override` для первого сервиса); наружу — только
+  реверс-прокси панели, включая WebSocket. Жизненный цикл: контейнер переживает
+  рестарт панели (`unless-stopped` у Dockerfile-проектов), статус синхронизируется
+  health-check'ом и `docker inspect`, откат/восстановление пересобирают образ,
+  удаление сайта чистит контейнеры, образы и тома проекта. Порт контейнера
+  редактируется в карточке сайта (`PATCH /api/sites/:id`, поле `containerPort`).
 - **Развёртывание в Docker** (`deploy/Dockerfile` + `deploy/docker-compose.yml`,
   `.dockerignore`). Образ на node:22-alpine: зависимости `npm ci
   --omit=dev --omit=optional` отдельным слоем, панель работает под

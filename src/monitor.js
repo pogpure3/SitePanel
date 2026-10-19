@@ -56,7 +56,7 @@ function pushHistory(siteId, point) {
 async function checkSite(site) {
   const t0 = Date.now();
   let point;
-  if (site.type === 'node' && manager.isRunning(site)) {
+  if ((site.type === 'node' || site.type === 'docker') && manager.isRunning(site)) {
     try {
       const ctl = new AbortController();
       const timer = setTimeout(() => ctl.abort(), 5000);
@@ -85,6 +85,13 @@ async function checkSite(site) {
     // выставленные деплоем, и роняла сайт в 'crashed' посреди работы (P-26).
     // setStatusIf применит переход, только если статус всё ещё 'running';
     // store.save() вызывается внутри — здесь он больше не нужен (M-02).
+    manager.setStatusIf(site, 'running', 'crashed');
+  }
+  // Docker: контейнер переживает панель (restart policy) и может умереть сам —
+  // у панели нет процесса, чей exit выставил бы crashed (M-02-механика node).
+  // Сверяемся с docker inspect: контейнера нет/не running → crashed; политика
+  // рестарта docker поднимет контейнер, следующий тик вернёт running.
+  if (site.type === 'docker' && site.status === 'running' && !(await manager.dockerContainerRunning(site))) {
     manager.setStatusIf(site, 'running', 'crashed');
   }
   // Самолечение: процесс жив, а статус завис в crashed (например, после сбоя панели).

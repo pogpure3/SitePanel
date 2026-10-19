@@ -285,7 +285,7 @@ async function _start(site, opts = {}) {
   const dir = siteDir(site);
   if (!fs.existsSync(dir)) return { ok: false, error: 'Каталог сайта не найден' };
 
-  // Порт нужен только node-сайту: у статики его нет по определению, и проверка
+  // Порт нужен node- и docker-сайтам: у статики его нет по определению, и проверка
   // выше ветки `static` ломала запуск любого статического сайта (503 «отключён»).
   if (site.type === 'static') {
     setStatus(site, 'running');
@@ -298,6 +298,8 @@ async function _start(site, opts = {}) {
   // никуда вплоть до 502 без внятной причины (P-21).
   const portErr = ensurePort(site);
   if (portErr) return portErr;
+
+  if (site.type === 'docker') return _startDocker(site);
 
   // node
   setStatus(site, 'starting');
@@ -503,7 +505,7 @@ function ensurePort(site) {
  * @returns {Promise<{ok: boolean, reason?: string}>}
  */
 async function waitListening(site, timeoutMs = config.appListenWaitMs) {
-  if (site.type !== 'node' || !site.port) return { ok: true };
+  if ((site.type !== 'node' && site.type !== 'docker') || !site.port) return { ok: true };
   const t0 = Date.now();
   while (Date.now() - t0 < Math.max(500, timeoutMs)) {
     if (await proc.portAnswers(site.port)) return { ok: true };
@@ -518,6 +520,7 @@ async function _stop(site) {
     appendLog(site, `[panel] ${ts()} статический сайт отключён`);
     return { ok: true };
   }
+  if (site.type === 'docker') return _stopDocker(site);
   const entry = processes.get(site.id);
   if (entry) {
     if (entry.restartTimer) clearTimeout(entry.restartTimer);
@@ -594,6 +597,182 @@ async function _stop(site) {
     }
   }
   return { ok: true };
+}
+
+/* ---------- Docker: старт / остановка / пересоздание ---------- */
+
+async function _startDocker(site) {
+  setStatus(site, 'starting');
+  const flavor = site.dockerFlavor || detectDockerFlavor(siteDir(site)) || 'dockerfile';
+  try {
+    if (flavor === 'compose') {
+      // Override мог не пережить подмену каталога (rollback/ручные правки) —
+      // без него у проекта не будет публикации порта.
+      if (!fs.existsSync(path.join(siteDir(site), (composeMainFile(siteDir(site)) || '') + '.sitepanel-override.yml'))) {
+        writeComposeOverride(site);
+      }
+      // up -d идемпотентен: создаёт контейнеры проекта, если их нет, поднимает
+      // остановленные; работающие не трогает. --no-build: образ собирается при
+      // деплое, повседневный старт не должен пересобирать проект.
+      await dockerRunLogged(site, `${composeBaseArgs(site)} up -d --no-build`,
+        { timeoutMin: 5, label: 'docker compose up' });
+    } else if (await dockerContainerExists(site)) {
+      await dockerRunLogged(site, `docker start ${dockerProjectName(site)}`, { timeoutMin: 5, label: 'docker start' });
+    } else {
+      await dockerRunLogged(site, dockerRunCmd(site), { timeoutMin: 5, label: 'docker run' });
+    }
+  } catch (err) {
+    setStatusIf(site, ['starting', 'running'], 'crashed');
+    alerts.siteDown(site, `не удалось запустить контейнер: ${err.message}`).catch(() => {});
+    return { ok: false, error: err.message };
+  }
+  const wait = await waitListening(site);
+  if (!wait.ok) {
+    setStatusIf(site, ['starting', 'running'], 'crashed');
+    alerts.siteDown(site, `контейнер запущен, но порт ${site.port} не открылся`).catch(() => {});
+    return { ok: false, error: 'Контейнер запущен, но порт не открылся — подробности в логах сайта' };
+  }
+  setStatus(site, 'running');
+  appendLog(site, `[panel] ${ts()} docker-сайт запущен (127.0.0.1:${site.port} → контейнер:${site.containerPort || '?'})`);
+  return { ok: true };
+}
+
+async function _stopDocker(site) {
+  const flavor = site.dockerFlavor || detectDockerFlavor(siteDir(site)) || 'dockerfile';
+  setStatus(site, 'stopped');
+  if (await dockerContainerExists(site)) {
+    try {
+      if (flavor === 'compose') {
+        // stop, а не down: повторный старт поднимет те же контейнеры с теми же
+        // настройками (down удалил бы их вместе с томами без explicit -v — нет).
+        await dockerRunLogged(site, `${composeBaseArgs(site)} stop`,
+          { timeoutMin: 2, label: 'docker compose stop' });
+      } else {
+        await dockerRunLogged(site, `docker stop ${dockerProjectName(site)}`, { timeoutMin: 2, label: 'docker stop' });
+      }
+    } catch (err) {
+      appendLog(site, `[panel] ${ts()} остановка контейнера не удалась: ${err.message}`);
+      return { ok: false, error: err.message };
+    }
+  }
+  // Published-порт держит docker-proxy от имени контейнера: после остановки
+  // контейнера порт освобождается сам. ensurePortFreed здесь не годится — он
+  // видит docker-proxy как ЧУЖОЙ процесс и отказывается его завершать.
+  const freed = await waitPortFree(site.port, 15000);
+  if (!freed) {
+    return { ok: false, error: `Порт ${site.port} не освободился после остановки контейнера` };
+  }
+  appendLog(site, `[panel] ${ts()} docker-сайт остановлен`);
+  return { ok: true };
+}
+
+/** Имя основного compose-файла каталога (детерминированный порядок). */
+function composeMainFile(dir) {
+  for (const f of COMPOSE_FILES) {
+    if (fs.existsSync(path.join(dir, f))) return f;
+  }
+  return null;
+}
+
+/**
+ * Имя ПЕРВОГО сервиса compose-файла. Полного YAML-парсера в панели нет —
+ * ищем сервис верхнего уровня (отступ ровно 2 пробела) после `services:`.
+ * Публикуем порт только ему: публиковать всем (например, БД) было бы дырой.
+ * @returns {string|null}
+ */
+function composeFirstService(text) {
+  let inServices = false;
+  for (const line of String(text).split('\n')) {
+    if (/^services\s*:(\s|#.*)?$/.test(line)) { inServices = true; continue; }
+    if (!inServices) continue;
+    const m = /^ {2}([A-Za-z0-9._-]+)\s*:(\s|#.*)?$/.exec(line);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/**
+ * Override-файл с публикацией порта. compose-проекты без ports не публикуют
+ * ничего — панель проксирует свой host-порт, поэтому генерируем сервису
+ * публикацию на 127.0.0.1. Тег !override ЗАМЕНЯЕТ пользовательский ports
+ * (иначе списки смёржились бы, и наружные публикации остались бы).
+ * Файл лежит в каталоге сайта и перезаписывается при деплое/старте.
+ */
+function writeComposeOverride(site) {
+  const main = composeMainFile(siteDir(site));
+  if (!main) {
+    const err = new Error('compose-файл не найден в каталоге сайта');
+    err.status = 400;
+    throw err;
+  }
+  const text = fs.readFileSync(path.join(siteDir(site), main), 'utf8');
+  const service = composeFirstService(text);
+  if (!service) {
+    const err = new Error('Не удалось определить имя сервиса в ' + main +
+      ' — упростите файл (сервис верхнего уровня с отступом 2 пробела) или уберите ports: панель публикует порт сама');
+    err.status = 400;
+    throw err;
+  }
+  const cp = Number(site.containerPort) || 3000;
+  const content = '# Сгенерировано SitePanel — перезаписывается при деплое/старте.\n' +
+    '# Порт наружу отдаёт реверс-прокси панели, публикация только на 127.0.0.1.\n' +
+    'services:\n' +
+    `  ${service}:\n` +
+    `    ports: !override ["127.0.0.1:${site.port}:${cp}"]\n`;
+  const file = main + '.sitepanel-override.yml';
+  fs.writeFileSync(path.join(siteDir(site), file), content);
+  appendLog(site, `[panel] ${ts()} записан ${file} (публикация 127.0.0.1:${site.port} → ${cp}, сервис ${service})`);
+  return file;
+}
+
+/** База compose-команды: проект + пара -f (основной файл + наш override). */
+function composeBaseArgs(site, fallbackMain = 'docker-compose.yml') {
+  const main = composeMainFile(siteDir(site)) || fallbackMain;
+  return `docker compose -p ${dockerProjectName(site)} -f ${main} -f ${main}.sitepanel-override.yml`;
+}
+
+/**
+ * Пересоздать контейнеры проекта на текущем образе. Нужен после отката/
+ * восстановления: docker start поднимает контейнер СО СТАРЫМ образом — без
+ * recreate откат каталога не изменил бы работающий сайт.
+ */
+async function dockerRecreate(site) {
+  if (site.dockerFlavor === 'compose') {
+    await dockerRunLogged(site, `${composeBaseArgs(site)} up -d --no-build`,
+      { timeoutMin: 5, label: 'docker compose up (пересоздание)' });
+  } else if (await dockerContainerExists(site)) {
+    await dockerRunLogged(site, `docker rm -f ${dockerProjectName(site)}`, { timeoutMin: 2, label: 'docker rm -f' });
+    // Контейнер создаст _startDocker через docker run — уже с новым образом.
+  }
+}
+
+/** Удалить контейнеры, образ и (для compose) тома проекта. Не бросает: сайт и так удаляется. */
+async function dockerRemoveAll(site) {
+  const name = dockerProjectName(site);
+  const flavor = site.dockerFlavor || detectDockerFlavor(siteDir(site)) || 'dockerfile';
+  try {
+    if (flavor === 'compose') {
+      try {
+        await dockerRunLogged(site, `${composeBaseArgs(site)} down --rmi local --volumes`,
+          { timeoutMin: 5, label: 'docker compose down' });
+      } catch (composeErr) {
+        // compose-файл мог исчезнуть из каталога (удаление битого сайта) —
+        // добиваем контейнеры проекта напрямую по label.
+        appendLog(site, `[panel] ${ts()} compose down не удался (${composeErr.message}) — удаляю контейнеры по label`);
+        const ids = await execDockerQuiet(['ps', '-aq', '--filter', `label=com.docker.compose.project=${name}`]);
+        if (ids) await dockerRunLogged(site, `docker rm -f ${ids.split('\n').join(' ')}`, { timeoutMin: 2, label: 'docker rm -f' });
+      }
+    } else {
+      if (await dockerContainerExists(site)) {
+        await dockerRunLogged(site, `docker rm -f ${name}`, { timeoutMin: 2, label: 'docker rm -f' });
+      }
+      try {
+        await dockerRunLogged(site, `docker rmi ${dockerImageName(site)}`, { timeoutMin: 5, label: 'docker rmi' });
+      } catch { /* образа могло не быть — не критично */ }
+    }
+  } catch (err) {
+    appendLog(site, `[panel] ${ts()} очистка docker-ресурсов не удалась: ${err.message} — проверьте docker ps вручную`);
+  }
 }
 
 async function _restart(site) {
@@ -695,6 +874,10 @@ function safeEntryPath(main) {
 }
 
 function detectType(dir) {
+  // Docker-проект определяется РАНЬШЕ package.json: dockerized node-приложение
+  // содержит package.json, но его рантайм — контейнер, а не node на хосте.
+  const flavor = detectDockerFlavor(dir);
+  if (flavor) return { type: 'docker', startCommand: null, dockerFlavor: flavor };
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
     const scripts = pkg.scripts || {};
@@ -718,7 +901,131 @@ function detectType(dir) {
   } catch {
     /* не node-проект */
   }
-  return { type: 'static', startCommand: null };
+  return { type: 'static', startCommand: null, dockerFlavor: null };
+}
+
+/* ---------- Docker-сайты ---------- */
+
+// Проект — каталог сайта с Dockerfile (флейвор dockerfile) или docker-compose-файлом
+// (флейвор compose). Панель билдит и запускает через docker CLI; контейнеры и образы
+// именуются префиксом sitepanel-<id>, чтобы не пересекаться с чужими и уметь их
+// находить после рестарта панели (контейнер переживает панель).
+const COMPOSE_FILES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
+const DOCKER_PREFIX = 'sitepanel-';
+
+function dockerProjectName(site) {
+  return DOCKER_PREFIX + site.id;
+}
+
+function dockerImageName(site) {
+  return DOCKER_PREFIX + site.id;
+}
+
+/** Флейвор проекта по файлам каталога. null — это не Docker-проект. */
+function detectDockerFlavor(dir) {
+  if (!dir || !fs.existsSync(dir)) return null;
+  if (COMPOSE_FILES.some((f) => fs.existsSync(path.join(dir, f)))) return 'compose';
+  if (fs.existsSync(path.join(dir, 'Dockerfile'))) return 'dockerfile';
+  return null;
+}
+
+/**
+ * Порт приложения внутри контейнера: EXPOSE из Dockerfile или короткий синтаксис
+ * ports из compose-файла ("8080:3000" → 3000). YAML-парсера в панели нет, поэтому
+ * compose читается построчным regex только по короткому синтаксису; если порт не
+ * нашёлся — сайт остаётся с containerPort пользователя или дефолтом 3000.
+ * @returns {number|null}
+ */
+function detectContainerPort(dir, flavor) {
+  try {
+    if (flavor === 'dockerfile') {
+      const df = fs.readFileSync(path.join(dir, 'Dockerfile'), 'utf8');
+      const exposes = [...df.matchAll(/^\s*EXPOSE\s+(\d{1,5})\s*$/gmi)]
+        .map((m) => Number(m[1]))
+        .filter((p) => p > 0 && p < 65536);
+      if (exposes.length) return exposes[0];
+      return null;
+    }
+    if (flavor === 'compose') {
+      for (const name of COMPOSE_FILES) {
+        const p = path.join(dir, name);
+        if (!fs.existsSync(p)) continue;
+        const text = fs.readFileSync(p, 'utf8');
+        for (const m of text.matchAll(/^\s*-\s*["']?(\d{1,5}(?::\d{1,5}){0,2})["']?\s*$/gm)) {
+          const parts = m[1].split(':').map(Number);
+          const cport = parts[parts.length - 1];
+          if (Number.isInteger(cport) && cport > 0 && cport < 65536) return cport;
+        }
+      }
+    }
+  } catch { /* нечитаемый файл — вернём null, порт попросим у пользователя */ }
+  return null;
+}
+
+/** Команда docker run: публикация только на 127.0.0.1, наружу — реверс-прокси панели. */
+function dockerRunCmd(site) {
+  const cp = Number(site.containerPort) || 3000;
+  // -e PORT: многие образы слушают порт из окружения; тем, кому он не нужен, env безвреден.
+  return `docker run -d --name ${dockerProjectName(site)} --restart unless-stopped ` +
+    `-p 127.0.0.1:${site.port}:${cp} -e PORT=${cp} -e HOST=0.0.0.0 -e SITE_ID=${site.id} -e SITEPANEL=1 ` +
+    `${dockerImageName(site)}`;
+}
+
+/** docker-команда с логом в журнал сайта: build/up/start/stop. Бросает при не-нулевом коде. */
+async function dockerRunLogged(site, cmd, { timeoutMin = null, label = 'Команда docker' } = {}) {
+  appendLog(site, `[panel] ${ts()} ${label}: ${cmd}`);
+  const res = await runCommand(cmd, siteDir(site), (line) => appendLog(site, line),
+    Math.max(1, timeoutMin || config.dockerBuildTimeoutMin) * 60000);
+  if (res.code !== 0) {
+    const why = res.timedOut ? 'превышен таймаут' : `код ${res.code}`;
+    throw new Error(`${label} не удалась (${why}) — подробности в логах сайта`);
+  }
+  return res;
+}
+
+/** Тихий docker-вызов без лога (inspect): строка stdout или null при ошибке. */
+function execDockerQuiet(args, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    const child = spawn('docker', args, { windowsHide: true });
+    let out = '';
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* уже мёртв */ }
+    }, timeoutMs);
+    child.stdout.on('data', (d) => { out += d.toString(); });
+    child.on('error', () => { clearTimeout(timer); resolve(null); });
+    child.on('close', (code) => { clearTimeout(timer); resolve(code === 0 ? out.trim() : null); });
+  });
+}
+
+async function dockerContainerExists(site) {
+  const out = await execDockerQuiet(['inspect', '--format', '{{.State.Status}}', dockerProjectName(site)]);
+  return out !== null;
+}
+
+/** Жив ли контейнер сайта (для монитора: панель переживает контейнер, а не наоборот). */
+async function dockerContainerRunning(site) {
+  const out = await execDockerQuiet(['inspect', '--format', '{{.State.Running}}', dockerProjectName(site)]);
+  return out === 'true';
+}
+
+/** Docker CLI доступен? Внятная ошибка вместо простыни «docker: command not found». */
+async function assertDockerAvailable() {
+  const out = await execDockerQuiet(['version', '--format', '{{.Server.Version}}'], 15000);
+  if (out === null) {
+    const err = new Error('Docker недоступен на этом сервере — Docker-сайты нельзя запустить (проверьте установку docker и права панели)');
+    err.dockerUnavailable = true;
+    throw err;
+  }
+  return out;
+}
+
+/** Сборка образа/проекта из каталога сайта. */
+async function dockerBuild(site) {
+  if (site.dockerFlavor === 'compose') {
+    await dockerRunLogged(site, `docker compose -p ${dockerProjectName(site)} build`, { label: 'Сборка Docker (compose build)' });
+  } else {
+    await dockerRunLogged(site, `docker build -t ${dockerImageName(site)} .`, { label: 'Сборка Docker-образа' });
+  }
 }
 
 // Режим файла из zip (внешние атрибуты): нужен для executable-бита и symlink'ов.
@@ -999,8 +1306,14 @@ async function finalizeDeploy(site, staging, opts = {}) {
     // и порт. Раньше detectType/allocatePort вызывались уже после подмены, и их
     // исключение оставляло сайт с новым каталогом и без записи о нём (P-30).
     const detected = detectType(staging);
+    // Docker-сайт: порт контейнера считаем ДО подмены (P-30: всё падающее — до swap).
+    // Приоритет: containerPort пользователя → EXPOSE/ports из проекта → 3000.
+    let dockerContainerPort = null;
+    if (detected.type === 'docker') {
+      dockerContainerPort = Number(site.containerPort) || detectContainerPort(staging, detected.dockerFlavor) || 3000;
+    }
     let port = Number.isInteger(Number(site.port)) && Number(site.port) > 0 ? Number(site.port) : null;
-    if (detected.type === 'node' && !port) port = await allocatePort();
+    if ((detected.type === 'node' || detected.type === 'docker') && !port) port = await allocatePort();
 
     // Маркер до первого rename: если панель умрёт между двумя rename, при старте
     // будет известно, что каталог подменялся, и его вернут из .backup (SP-05).
@@ -1041,6 +1354,15 @@ async function finalizeDeploy(site, staging, opts = {}) {
 
     site.type = detected.type;
     site.startCommand = detected.startCommand;
+    if (detected.type === 'docker') {
+      site.dockerFlavor = detected.dockerFlavor;
+      if (site.containerPort !== dockerContainerPort) {
+        site.containerPort = dockerContainerPort;
+        appendLog(site, `[panel] ${ts()} порт контейнера: ${dockerContainerPort} (публикуется на 127.0.0.1:${port})`);
+      }
+    } else {
+      site.dockerFlavor = null;
+    }
     if (port) site.port = port;
     store.save();
 
@@ -1054,6 +1376,17 @@ async function finalizeDeploy(site, staging, opts = {}) {
         if (!inst.ok) site.lastDeployWarning = 'Установка зависимостей завершилась с ошибкой — сайт может не запуститься';
         else delete site.lastDeployWarning;
       }
+    }
+    if (site.type === 'docker') {
+      // Сборка ПОСЛЕ подмены (контекст — уже новый каталог), но ДО старта:
+      // упавший билд выбросит ошибку, catch выше откатит каталог на .backup.
+      // Пересоздание обязательно: docker start поднял бы контейнер со СТАРЫМ
+      // образом, и обновление не проявило бы себя.
+      if (site.dockerFlavor === 'compose') writeComposeOverride(site);
+      await assertDockerAvailable();
+      await dockerBuild(site);
+      await dockerRecreate(site);
+      delete site.lastDeployWarning;
     }
     site.updatedAt = Date.now();
     store.flush();
@@ -1468,6 +1801,19 @@ async function _rollback(site) {
   site.updatedAt = Date.now();
   store.flush();
   appendLog(site, `[panel] ${ts()} выполнен откат к предыдущей версии`);
+  if (site.type === 'docker') {
+    // Контейнер держит СТАРЫЙ образ: без пересборки и пересоздания откат
+    // каталога не изменил бы работающий сайт до ближайшего recreate.
+    try {
+      await assertDockerAvailable();
+      if (site.dockerFlavor === 'compose') writeComposeOverride(site);
+      await dockerBuild(site);
+      await dockerRecreate(site);
+    } catch (err) {
+      appendLog(site, `[panel] ${ts()} пересборка откаченной версии не удалась: ${err.message}`);
+      return { ok: false, error: 'Каталог откачен, но пересборка контейнера не удалась: ' + err.message };
+    }
+  }
   if (wasRunning || site.autoStart) return await _start(site);
   return { ok: true };
 }
@@ -1523,6 +1869,19 @@ async function _restoreBackup(site, zipPath) {
     const inst = await npmInstall(site, dir);
     if (!inst.ok) {
       appendLog(site, `[panel] ${ts()} установка зависимостей после восстановления завершилась с ошибкой — сайт может не запуститься`);
+    }
+  }
+  if (site.type === 'docker') {
+    // Как при откате: контейнер держит старый образ, восстановленный каталог
+    // нужно пересобрать и пересоздать, иначе восстановление не проявится.
+    try {
+      await assertDockerAvailable();
+      if (site.dockerFlavor === 'compose') writeComposeOverride(site);
+      await dockerBuild(site);
+      await dockerRecreate(site);
+    } catch (err) {
+      appendLog(site, `[panel] ${ts()} пересборка восстановленной версии не удалась: ${err.message}`);
+      return { ok: false, error: 'Файлы восстановлены, но пересборка контейнера не удалась: ' + err.message };
     }
   }
   site.updatedAt = Date.now();
@@ -1599,6 +1958,7 @@ async function _removeSite(site) {
   await _stop(site);
   processes.delete(site.id);
   alerts.siteSilentClear(site.id);
+  if (site.type === 'docker') await dockerRemoveAll(site);
   if (site.type === 'node') await new Promise((r) => setTimeout(r, 1500));
   rmDirSafe(siteDir(site));
   rmDirSafe(siteDir(site) + '.backup');
@@ -1683,4 +2043,10 @@ module.exports = {
   entryMode,
   resetBackoff,
   nextBackoffDelay,
+  detectType,
+  detectDockerFlavor,
+  detectContainerPort,
+  composeFirstService,
+  dockerContainerRunning,
+  dockerProjectName,
 };

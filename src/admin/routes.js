@@ -127,6 +127,8 @@ function serializeSite(site, withStats = true) {
     gitSubdir: site.gitSubdir || null,
     ssl: site.ssl || { status: 'none' },
     backupSchedule: backups.scheduleOf(site),
+    containerPort: site.containerPort || null,
+    dockerFlavor: site.dockerFlavor || null,
     // health — телеметрия монитора из памяти, не поле записи (M-02).
     health: monitor.healthFor(site.id),
     // Диагностика цикла перезапусков: attempts — текущий бэкофф, crashLoop — лимит исчерпан.
@@ -174,6 +176,8 @@ router.post('/sites', upload.single('file'), wrap(async (req, res) => {
     // Расписание бэкапов: validateSite проставит дефолт только при чтении db.json,
     // поэтому у свежесозданного сайта поле нужно сразу (до перезапуска панели).
     backupSchedule: { ...backups.DEFAULT_SCHEDULE },
+    containerPort: null,
+    dockerFlavor: null,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -213,6 +217,8 @@ router.post('/sites/git', wrap(async (req, res) => {
     // Расписание бэкапов: validateSite проставит дефолт только при чтении db.json,
     // поэтому у свежесозданного сайта поле нужно сразу (до перезапуска панели).
     backupSchedule: { ...backups.DEFAULT_SCHEDULE },
+    containerPort: null,
+    dockerFlavor: null,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -300,6 +306,19 @@ router.patch('/sites/:id', wrap(async (req, res) => {
   const site = findSite(req);
   if (req.body.name) site.name = slugify(req.body.name);
   if (req.body.autoStart !== undefined) site.autoStart = !!req.body.autoStart;
+  // containerPort: порт приложения внутри контейнера docker-сайта. null —
+  // заново детектировать из EXPOSE/ports при следующем деплое.
+  if (req.body.containerPort !== undefined) {
+    if (req.body.containerPort === null || req.body.containerPort === '') {
+      site.containerPort = null;
+    } else {
+      const cp = Number(req.body.containerPort);
+      if (!Number.isInteger(cp) || cp <= 0 || cp >= 65536) {
+        return res.status(400).json({ error: 'containerPort: целое число 1..65535 или null' });
+      }
+      site.containerPort = cp;
+    }
+  }
   // flush(), а не save(): ошибка записи должна вернуть 5xx, а не «ок» через 250 мс.
   store.flush();
   res.json(await serializeSite(site));

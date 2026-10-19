@@ -492,7 +492,10 @@ function route(req, res, isHttps) {
     return res.end();
   }
 
-  if (site.type === 'node') return proxyToNode(site, req, res, host);
+  // docker-сайт проксируется как node: панель публикует контейнер на
+  // 127.0.0.1:<site.port>. Падать в serveStatic нельзя — иначе каталог сайта
+  // (Dockerfile, исходники, секреты build-контекста) утечёт как статика.
+  if (site.type === 'node' || site.type === 'docker') return proxyToNode(site, req, res, host);
   return serveStatic(site, req, res);
 }
 
@@ -539,11 +542,12 @@ function createServers() {
     (req, res) => handleRequest(req, res, true)
   );
 
-  // Websockets -> в node-приложения.
+  // Websockets -> в node-приложения и docker-контейнеры (публикуются одинаково:
+  // 127.0.0.1:<site.port>).
   const routeUpgrade = (req, socket, head) => {
     const site = store.getSiteByDomain(hostOf(req));
     const port = site ? Number(site.port) : NaN;
-    if (!site || site.type !== 'node' || site.status !== 'running' || !Number.isInteger(port) || port <= 0) {
+    if (!site || (site.type !== 'node' && site.type !== 'docker') || site.status !== 'running' || !Number.isInteger(port) || port <= 0) {
       return socket.destroy();
     }
     // Кросс-сайтовый WS-апгрейд браузер помечает чужим Origin — не пускаем (H-21).

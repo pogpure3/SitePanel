@@ -81,7 +81,7 @@
   <div class="modal-backdrop hidden" id="addModal">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="addTitle">
       <h2 id="addTitle">Добавить сайт</h2>
-      <p class="hint">Загрузите .zip архив или укажите Git-репозиторий. Если внутри есть package.json со скриптом <code>start</code> — сайт определится как Node.js-приложение и будет слушать <code>process.env.PORT</code>. Иначе — статический сайт.</p>
+      <p class="hint">Загрузите .zip архив или укажите Git-репозиторий. Если внутри есть package.json со скриптом <code>start</code> — сайт определится как Node.js-приложение и будет слушать <code>process.env.PORT</code>. Если внутри есть <code>Dockerfile</code> или <code>docker-compose.yml</code> — сайт запустится как Docker-проект (панель соберёт и поднимет контейнер; порт внутри контейнера берётся из <code>EXPOSE</code>/<code>ports</code> или задаётся в карточке сайта). Иначе — статический сайт.</p>
       <form id="addForm">
         <div class="source-toggle">
           <label class="checkbox"><input type="radio" name="source" value="zip" checked> ZIP-архив</label>

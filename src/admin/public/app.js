@@ -198,6 +198,10 @@ function statusLabel(s) {
   return { running: 'Работает', stopped: 'Остановлен', starting: 'Запускается...', crashed: 'Упал', unknown: '—' }[s] || s;
 }
 
+function typeLabel(t) {
+  return { node: 'Node.js', docker: 'Docker', static: 'Статика' }[t] || t;
+}
+
 // Расширенная подпись статуса: показывает, что панель уже перезапускала сайт.
 function statusLabelFull(s, site) {
   const n = (site && site.restartCount) || 0;
@@ -668,7 +672,7 @@ function patchRow(row, s) {
   dot.title = statusLabelFull(s.status, s);
 
   row.querySelector('.site-title').textContent = s.name;
-  row.querySelector('.badge.type').textContent = s.type === 'node' ? 'Node.js' : 'Статика';
+  row.querySelector('.badge.type').textContent = typeLabel(s.type);
   row.querySelector('.ssl-slot').innerHTML = sslBadge(s.ssl);
   row.querySelector('.loop-slot').innerHTML = loopBadge(s);
 
@@ -774,6 +778,7 @@ function renderSite(site) {
             <dt>Статус</dt><dd id="dStatus"></dd>
             <dt>Тип</dt><dd id="dType"></dd>
             <dt>Внутренний порт</dt><dd id="dPort"></dd>
+            <dt id="dContainerPortLabel" class="hidden">Порт контейнера</dt><dd id="dContainerPort" class="hidden" style="cursor:pointer" title="Изменить порт приложения внутри контейнера"></dd>
             <dt>PID</dt><dd id="dPid">—</dd>
             <dt>Память</dt><dd id="dMem">—</dd>
             <dt>Аптайм процесса</dt><dd id="dUptime">—</dd>
@@ -1039,8 +1044,35 @@ function patchDetail(site) {
   document.getElementById('dLoopBadge').innerHTML = loopBadge(site);
 
   document.getElementById('dStatus').textContent = statusLabelFull(site.status, site);
-  document.getElementById('dType').textContent = site.type === 'node' ? 'Node.js-приложение' : 'Статический сайт';
+  document.getElementById('dType').textContent = typeLabel(site.type) === 'Node.js' ? 'Node.js-приложение'
+    : site.type === 'docker' ? 'Docker-контейнер' : 'Статический сайт';
   document.getElementById('dPort').textContent = site.port || '—';
+  // Docker-сайт: какой порт панель публикует и какой порт слушает приложение
+  // внутри контейнера. Правка — кликом (PATCH containerPort; null — заново
+  // детектировать из EXPOSE/ports при следующем деплое).
+  const cpl = document.getElementById('dContainerPortLabel');
+  const cp = document.getElementById('dContainerPort');
+  if (site.type === 'docker') {
+    cpl.classList.remove('hidden');
+    cp.classList.remove('hidden');
+    cp.textContent = (site.containerPort || '?') + ' → 127.0.0.1:' + (site.port || '?') + ' ✎';
+    cp.onclick = async () => {
+      const v = await promptDialog('Порт приложения внутри контейнера', site.containerPort || '');
+      if (v === null) return;
+      const body = { containerPort: v.trim() === '' ? null : Number(v) };
+      try {
+        await api('PATCH', `/api/sites/${site.id}`, body);
+        toast(body.containerPort ? 'Порт контейнера сохранён — перезапустите сайт, чтобы он применился' : 'Порт контейнера сброшен — определится при следующем деплое', 'success');
+        render();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    };
+  } else {
+    cpl.classList.add('hidden');
+    cp.classList.add('hidden');
+    cp.onclick = null;
+  }
   document.getElementById('dPid').textContent = site.stats && site.stats.pid ? site.stats.pid : '—';
   document.getElementById('dMem').textContent = site.stats && site.stats.memoryMb ? site.stats.memoryMb + ' МБ' : '—';
   document.getElementById('dUptime').textContent = site.stats ? fmtUptime(site.stats.uptimeSec) : '—';
@@ -2015,7 +2047,7 @@ document.getElementById('addForm').addEventListener('submit', async (e) => {
     closeModal('addModal');
     form.reset();
     syncSourceFields();
-    toast(`Сайт «${site.name}» развёрнут (${site.type === 'node' ? 'Node.js' : 'статика'})`, 'success');
+    toast(`Сайт «${site.name}» развёрнут (${typeLabel(site.type)})`, 'success');
     navigate({ name: 'site', id: site.id });
   } catch (err) {
     toast(err.message, 'error');
