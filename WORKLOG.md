@@ -8,6 +8,90 @@
 
 ---
 
+## 2026-10-20 — Сайт api-progression (apitest.evil-mesh.ru) на panel_test + поддержка deploy/-layout
+
+**Запрос.** «Добавь сайт с доменом apitest.evil-mesh.ru из репо
+github.com/pogpure3/api-progression на тестовый стенд». Учётные данные админки
+панели пользователь прислал в чате (логин `admin`, пароль *** — в auth.json
+фактический логин `admin`, «Admin» не сработал).
+
+**Диагностика.**
+- Репозиторий **приватный** (404 без авторизации); локальный `gh` авторизован
+  как pogpure3 — токен для клона получен через `gh auth token` (***, в WORKLOG
+  маскируется, на стенд передан через временный файл /tmp с shred после).
+- Проект: Node ≥ 22.5 (`node:sqlite`), ноль npm-зависимостей, порт из
+  `process.env.PORT` (дефолт 7011), SQLite в `deploy/data` (volume compose).
+  На стенде Node 20 → как plain node невозможен; задуман под Docker.
+- **Layout: Dockerfile и docker-compose.yml лежат в подкаталоге `deploy/`**
+  с build-контекстом на КОРЕНЬ репо (`context: ..`) — вчерашний docker-флейвор
+  панели искал Docker-файлы только в корне сайта.
+- DNS `apitest.evil-mesh.ru` → 46.29.164.250 (panel_test) уже настроено.
+- Шаблон домена на стенде: nginx-вхост (80→301, 443→прокси 127.0.0.1:8080,
+  certbot `--nginx`), TLS терминирует nginx — как у pqr.
+
+**Изменения — код панели** (коммит ниже):
+- `src/sites/manager.js`: поддержка deploy/-layout — `detectDockerFlavor`
+  ищет compose/Dockerfile в корне И в `deploy/` (приоритет корня); новый
+  `dockerfileRel`; `composeMainFile` возвращает относительный путь
+  ('deploy/docker-compose.yml') — он идёт в `-f` и в путь override-файла;
+  `dockerBuild` для compose использует `composeBaseArgs` (пара -f), для
+  Dockerfile из deploy/ — `docker build -f deploy/Dockerfile .` (контекст —
+  корень сайта). Контейнеры compose-флейвора ищутся по label
+  `com.docker.compose.project=sitepanel-<id>` (`composeContainerIds`) —
+  пользовательский `container_name` (у api-progression — `pumping-api`)
+  делает поиск по имени непригодным (монитор/стоп/удаление). PRESERVED_DIRS
+  (`deploy/data`, `data`): каталоги данных копируются из .backup после свапа —
+  SQLite-база переживает передеплои.
+- **Баг, найденный на живом деплое**: строки портов compose с хвостовым
+  комментарием (`- "7011:7011"   # тот же порт, что у fox-report`) не
+  матчились regex'ом → containerPort сваливался в дефолт 3000 → публикация
+  10000:3000 при приложении на 7011. Фикс: `(\s+#.*)?` в regex; регрессионный
+  тест добавлен. (Попутно замечено: docker-proxy принимает TCP до мёртвого
+  бэкенда, поэтому waitListening прошёл — статус running при мёртвом порту;
+  реальную недоступность ловит HTTP health-check монитора.)
+- `tests/docker-sites.test.js`: юнит-тесты deploy/-layout (детект, порты,
+  приоритет корня), интеграционный тест точного layout'а репозитория
+  (deploy/Dockerfile+compose с context '..', перенос deploy/data через
+  обновление).
+
+**Изменения — panel_test.**
+- Код: бэкап `/root/sitepanel-code-backup-20261020-012913.tar.gz`, заменены
+  `src/sites/manager.js`, `tests/docker-sites.test.js`, рестарт (два раза:
+  до и после фикса regex).
+- Сайт: `POST /api/sites/git` (url, branch main, токен gh, autoStart) → сайт
+  `3ac49e2f0d64` «api-progression», тип docker/compose, порт 10000,
+  containerPort 7011 (после фикса; первый деплой ушёл с 3000 — исправлен
+  PATCH containerPort=null + update-git). Домен apitest.evil-mesh.ru привязан
+  в панели. Сгенерирован `deploy/docker-compose.yml.sitepanel-override.yml`
+  (публикация `127.0.0.1:10000:7011`, сервис pumping-api).
+- Nginx: вхост `/etc/nginx/sites-available/apitest` (+symlink в enabled):
+  staged :80 → certbot certonly --nginx → полный (80→301, 443→8080 с
+  Upgrade-заголовками, по шаблону pqr-panel); копия `/root/apitest.nginx.bak.*`;
+  `nginx -t` ok до обоих reload. Сертификат Let's Encrypt apitest.evil-mesh.ru
+  (ECDSA, до 2027-01-17), продление — certbot (authenticator nginx).
+
+**Проверка.**
+- Код: локально 8 тестов файла — 5 pass / 3 skip (docker на Windows-машине
+  нет); на стенде до фикса 8/8, после фикса — см. ниже; lint чистый.
+- Сайт: панель — status running, health up (200, 9 мс), containerPort 7011,
+  домен привязан; docker ps: `pumping-api 127.0.0.1:10000->7011 Up`.
+- Извне: `http://apitest.evil-mesh.ru` → 301 https; https → 200 (кабинет),
+  ssl verify 0; `GET /api/word/biglist?token=***&server_name=test&minWords=2&maxWords=3`
+  → 200 «no data for these settings» (база слов пуста — импорта ещё не было);
+  без токена → 401. Соседи не задеты: pqr 200, panel login 200.
+- Данные кабинета: первый вход — логин admin@local, пароль *** (сгенерирован
+  приложением, взят из docker logs; база пересоздана до чистой, т.к. пароль
+  первого контейнера был утерян при recreate). API-токен приложения — ***.
+
+**Осталось.**
+- Импорт базы слов/URL в кабинет приложения — пользователем через UI кабинета.
+- PUBLIC_BASE_URL кабинета не задан (ссылки собираются как localhost) —
+  задать в кабинете (public_base_url) или добавить env в override.
+- Обновления сайта — кнопкой «Обновить из Git» в панели (токен сохранён в
+  db.json, 0600). База deploy/data переживёт обновление (PRESERVED_DIRS).
+- Код панели (deploy/-layout) на panel_beget не выкладывался (там нет docker,
+  изменения обратно совместимы) — уедет со следующей полной выкладкой.
+
 ## 2026-10-20 — Docker-сайты: деплой проектов через Dockerfile и docker-compose.yml
 
 **Запрос.** «Добавь возможность добавлять сайты-проекты в панель через

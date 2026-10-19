@@ -666,10 +666,17 @@ async function _stopDocker(site) {
   return { ok: true };
 }
 
-/** Имя основного compose-файла каталога (детерминированный порядок). */
+/**
+ * Основной compose-файл каталога: корень или подкаталог deploy/ (детерминированный
+ * порядок). Возвращает путь ОТНОСИТЕЛЬНО dir — 'docker-compose.yml' или
+ * 'deploy/docker-compose.yml': он идёт в -f (cwd — корень сайта) и в пути
+ * override-файла рядом с оригиналом.
+ */
 function composeMainFile(dir) {
-  for (const f of COMPOSE_FILES) {
-    if (fs.existsSync(path.join(dir, f))) return f;
+  for (const sub of ['', 'deploy/']) {
+    for (const f of COMPOSE_FILES) {
+      if (fs.existsSync(path.join(dir, sub + f))) return sub + f;
+    }
   }
   return null;
 }
@@ -921,11 +928,26 @@ function dockerImageName(site) {
   return DOCKER_PREFIX + site.id;
 }
 
-/** Флейвор проекта по файлам каталога. null — это не Docker-проект. */
+/** Dockerfile каталога: корень или deploy/. Путь относительно dir. */
+function dockerfileRel(dir) {
+  for (const p of ['Dockerfile', 'deploy/Dockerfile']) {
+    if (fs.existsSync(path.join(dir, p))) return p;
+  }
+  return null;
+}
+
+/**
+ * Флейвор проекта по файлам каталога. null — это не Docker-проект.
+ * Многие проекты держат Docker-файлы в подкаталоге deploy/ с build-контекстом
+ * на КОРЕНЬ репозитория (COPY server.js и т.п.) — такой layout тоже поддерживаем:
+ * панель собирает с контекстом корня сайта и явным -f.
+ */
 function detectDockerFlavor(dir) {
   if (!dir || !fs.existsSync(dir)) return null;
   if (COMPOSE_FILES.some((f) => fs.existsSync(path.join(dir, f)))) return 'compose';
-  if (fs.existsSync(path.join(dir, 'Dockerfile'))) return 'dockerfile';
+  if (dockerfileRel(dir) === 'Dockerfile') return 'dockerfile';
+  if (COMPOSE_FILES.some((f) => fs.existsSync(path.join(dir, 'deploy', f)))) return 'compose';
+  if (dockerfileRel(dir)) return 'dockerfile';
   return null;
 }
 
@@ -939,23 +961,25 @@ function detectDockerFlavor(dir) {
 function detectContainerPort(dir, flavor) {
   try {
     if (flavor === 'dockerfile') {
-      const df = fs.readFileSync(path.join(dir, 'Dockerfile'), 'utf8');
-      const exposes = [...df.matchAll(/^\s*EXPOSE\s+(\d{1,5})\s*$/gmi)]
+      const df = dockerfileRel(dir) || 'Dockerfile';
+      const text = fs.readFileSync(path.join(dir, df), 'utf8');
+      const exposes = [...text.matchAll(/^\s*EXPOSE\s+(\d{1,5})\s*$/gmi)]
         .map((m) => Number(m[1]))
         .filter((p) => p > 0 && p < 65536);
       if (exposes.length) return exposes[0];
       return null;
     }
     if (flavor === 'compose') {
-      for (const name of COMPOSE_FILES) {
-        const p = path.join(dir, name);
-        if (!fs.existsSync(p)) continue;
-        const text = fs.readFileSync(p, 'utf8');
-        for (const m of text.matchAll(/^\s*-\s*["']?(\d{1,5}(?::\d{1,5}){0,2})["']?\s*$/gm)) {
-          const parts = m[1].split(':').map(Number);
-          const cport = parts[parts.length - 1];
-          if (Number.isInteger(cport) && cport > 0 && cport < 65536) return cport;
-        }
+      const main = composeMainFile(dir);
+      if (!main) return null;
+      const text = fs.readFileSync(path.join(dir, main), 'utf8');
+      // Хвостовой комментарий («- "7011:7011"  # тот же порт, что у fox-report»)
+      // — обычное дело в пользовательских compose: без (\s+#.*)? строка порта
+      // с комментарием молча не матчилась, и порт сваливался в дефолт 3000.
+      for (const m of text.matchAll(/^\s*-\s*["']?(\d{1,5}(?::\d{1,5}){0,2})["']?(\s+#.*)?\s*$/gm)) {
+        const parts = m[1].split(':').map(Number);
+        const cport = parts[parts.length - 1];
+        if (Number.isInteger(cport) && cport > 0 && cport < 65536) return cport;
       }
     }
   } catch { /* нечитаемый файл — вернём null, порт попросим у пользователя */ }
@@ -997,13 +1021,36 @@ function execDockerQuiet(args, timeoutMs = 8000) {
   });
 }
 
+/**
+ * ID контейнеров compose-проекта по label. Имя контейнера задаёт ПОЛЬЗОВАТЕЛЬ
+ * (container_name в compose-файле — например, «pumping-api»), поэтому искать
+ * по sitepanel-<id> нельзя; label com.docker.compose.project панель задаёт сама.
+ */
+async function composeContainerIds(site, { onlyRunning = false } = {}) {
+  const out = await execDockerQuiet([
+    'ps', onlyRunning ? '-q' : '-aq', '--filter', `label=com.docker.compose.project=${dockerProjectName(site)}`,
+  ]);
+  return out && out.trim() ? out.trim().split('\n').filter(Boolean) : [];
+}
+
 async function dockerContainerExists(site) {
+  if (site.dockerFlavor === 'compose') {
+    return (await composeContainerIds(site)).length > 0;
+  }
   const out = await execDockerQuiet(['inspect', '--format', '{{.State.Status}}', dockerProjectName(site)]);
   return out !== null;
 }
 
 /** Жив ли контейнер сайта (для монитора: панель переживает контейнер, а не наоборот). */
 async function dockerContainerRunning(site) {
+  if (site.dockerFlavor === 'compose') {
+    const ids = await composeContainerIds(site, { onlyRunning: true });
+    if (!ids.length) return false;
+    // Для multi-container проекта «работает» = живы ВСЕ контейнеры: упавший
+    // сервис зависимости — тоже падение сайта.
+    const out = await execDockerQuiet(['inspect', '--format', '{{.State.Running}}', ...ids]);
+    return out !== null && out.split('\n').map((s) => s.trim()).every((s) => s === 'true');
+  }
   const out = await execDockerQuiet(['inspect', '--format', '{{.State.Running}}', dockerProjectName(site)]);
   return out === 'true';
 }
@@ -1022,9 +1069,15 @@ async function assertDockerAvailable() {
 /** Сборка образа/проекта из каталога сайта. */
 async function dockerBuild(site) {
   if (site.dockerFlavor === 'compose') {
-    await dockerRunLogged(site, `docker compose -p ${dockerProjectName(site)} build`, { label: 'Сборка Docker (compose build)' });
+    // composeBaseArgs даёт -f пару: при deploy/-layout основной файл лежит в
+    // подкаталоге — без явного -f compose его не найдёт (cwd — корень сайта).
+    await dockerRunLogged(site, `${composeBaseArgs(site)} build`, { label: 'Сборка Docker (compose build)' });
   } else {
-    await dockerRunLogged(site, `docker build -t ${dockerImageName(site)} .`, { label: 'Сборка Docker-образа' });
+    const df = dockerfileRel(siteDir(site)) || 'Dockerfile';
+    // Dockerfile из deploy/ собирается с контекстом КОРНЯ сайта: их COPY ссылаются
+    // на файлы репозитория (COPY server.js, COPY lib ./lib), а не на deploy/.
+    const fArg = df === 'Dockerfile' ? '' : ` -f ${df}`;
+    await dockerRunLogged(site, `docker build -t ${dockerImageName(site)}${fArg} .`, { label: 'Сборка Docker-образа' });
   }
 }
 
@@ -1288,6 +1341,10 @@ async function npmInstall(site, dir = siteDir(site), opts = {}) {
 const PRESERVED_FILES = ['.env', 'config.json', 'state.json'];
 // Из них секреты: копию .env не должен читать никто, кроме владельца панели.
 const SECRET_PRESERVED = new Set(['.env']);
+// Каталоги, переживаемые деплоем целиком. compose-проекты с volume ./data кладут
+// SQLite/файлы в deploy/data (путь relative к compose-файлу) — без переноса
+// база стиралась бы каждым передеплоем из Git.
+const PRESERVED_DIRS = ['deploy/data', 'data'];
 
 async function finalizeDeploy(site, staging, opts = {}) {
   const dir = siteDir(site);
@@ -1348,6 +1405,17 @@ async function finalizeDeploy(site, staging, opts = {}) {
         if (SECRET_PRESERVED.has(f)) secure.writePrivate(np, data);
         else fs.writeFileSync(np, data);
         restored.push(f);
+      }
+    }
+    // Каталоги данных копируем из .backup ПОСЛЕ свапа (в память не буферизуются).
+    // backup здесь — прежний каталог сайта, он гарантированно существует для
+    // повторного деплоя (первый деплой каталогов не сохраняет — их ещё нет).
+    for (const d of PRESERVED_DIRS) {
+      const src = path.join(backup, d);
+      const dst = path.join(dir, d);
+      if (fs.existsSync(src) && !fs.existsSync(dst)) {
+        fs.cpSync(src, dst, { recursive: true });
+        restored.push(d + '/');
       }
     }
     if (restored.length) appendLog(site, `[panel] ${ts()} перенесены из предыдущей версии: ${restored.join(', ')}`);
