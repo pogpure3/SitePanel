@@ -335,6 +335,11 @@
 
 ### Инфраструктура стенда
 
+**panel_test: client_max_body_size 2g на вхосте apitest** (2026-10-20) —
+снятие дефолтного лимита nginx 1m для импорта базы через кабинет
+apitest.evil-mesh.ru. Бэкап вхоста `apitest.bak.20261020-120652`, `nginx -t`
+ok, reload; POST 2 МБ — 200 (было 413).
+
 **Docker установлен на panel_test** (2026-10-19): Docker CE 29.9.1 +
 Compose v5.6.0 из официального репозитория download.docker.com
 (`/etc/apt/keyrings/docker.asc`, `/etc/apt/sources.list.d/docker.list`).
