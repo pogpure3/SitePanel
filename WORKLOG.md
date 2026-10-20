@@ -8,6 +8,76 @@
 
 ---
 
+## 2026-10-20 — Ревью-фиксы 2: docker.js, потоковые бэкапы, консистентность SQLite, container_name, .dockerignore
+
+**Запрос.** «Делай оставшееся, бегет панель пока не трогай» — закрытие
+оставшихся позиций ревью (см. «Осталось» предыдущей записи); panel_beget
+не затрагивался.
+
+**Изменения.**
+- `src/sites/docker.js` — НОВЫЙ (~640 строк): вынесен весь docker-блок из
+  manager.js (константы, detect, валидация compose, override, build,
+  контейнеры, applyContainerPort, dockerRemoveAll, _startDocker/_stopDocker
+  → публичные dockerStart/dockerStop). Зависимости manager'а инжектируются
+  `docker.init({ manager, stopInternal, startInternal, waitPortFree })`
+  (циклический require исключён); manager реэкспортирует docker-функции
+  (`...docker`). manager.js: 2120 → 1830 строк.
+- **Регрессия, пойманная на живом прогоне**: экспорт `start`/`stop`
+  docker-модуля через spread `...docker` ЗАТИРАЛ публичные `start`/`stop`
+  менеджера в module.exports — деплой статики уходил в `docker run`
+  (`docker run -p 127.0.0.1:null:3000`), H-10-тест падал 503. Найдено
+  трассировкой `new Error().stack` в `dockerRunLogged`; переименовано в
+  `dockerStart`/`dockerStop`. Дополнительно всплыло и исправлено: `alerts`
+  и `waitListening` не были экспортированы manager'ом (docker.js их звал).
+- `src/sites/backups.js`: потоковая упаковка **archiver@8** вместо in-memory
+  adm-zip (R5) — архив пишется на диск напрямую, память не растёт с сайтом;
+  `ZipArchive`-класс (ESM-пакет, интероп `require()` нестабилен — фабрика
+  Archiver в некоторых порядках загрузки возвращает namespace; ловилось на
+  панели как «Archiver is not a constructor»); abort-путь пустого каталога
+  закрывает writeStream и убирает tmp (тест).
+- R3 — консистентный бэкап docker-сайтов: контейнеры гасятся на время
+  упаковки (`manager.stopDockerContainers`) и поднимаются обратно
+  (`startDockerContainers`); не поднялся после бэкапа — честный crashed.
+  Низкоуровневые stop/startDockerContainers вынесены из _stopDocker/_startDocker
+  (без статуса сайта).
+- R2 — override сбрасывает `container_name` всех сервисов
+  (`container_name: !reset null`): имя контейнера глобально уникально,
+  два сайта из одного репо конфликтовали; теперь всегда
+  `<проект>-<сервис>-1` (проверено живым docker на стенде: compose config
+  + up/down).
+- R1 — `ensureSiteDockerignore`: при деплое docker-проекта без своего
+  .dockerignore создаётся генерённый (.env, node_modules, deploy/data, data,
+  *.db*); свой файл проекта не трогается.
+- Тесты: `tests/backups.test.js` + тест «пустой каталог — 400, tmp чист»
+  (10 всего); `tests/docker-sites.test.js` — прежние 14.
+- Зависимости: **archiver ^8.0.0** добавлен (package.json + lock).
+- README (Стек), CHANGELOG (Исправлено +5).
+
+**Выкладка — panel_test.** Бэкап кода ДО:
+`/root/sitepanel-code-backup-20261020-231654.tar.gz`. Заменены:
+src/sites/{manager,docker(новый),backups}.js, src/monitor.js,
+src/admin/routes.js, src/admin/public/app.js, tests/{backups,docker-sites}.test.js,
+package.json, package-lock.json; `npm install --omit=dev --omit=optional`
+(archiver 8.0.0); node --check всех; md5 docker.js/backups.js локаль = стенд;
+рестарт → active.
+
+**Проверка.**
+- Локально: lint чист; полный набор 228 тестов — 204 pass, 3 fail
+  (преморбидные Windows T-32/T-43/T-44), интеграции скипнуты.
+- На стенде: docker-sites + backups = **24 теста — 24 pass** (8 docker-
+  интеграций по-настоящему: деплой/прокси/стоп-старт/обновление/откат/
+  безопасность compose/самолечение/host-npm/containerPort; бэкапы: циклы,
+  ротация, консистентность, tmp-чистота).
+- Живой apitest: 200, статус running (его override без container_name-reset
+  обновится при следующем деплое — сейчас не мешает).
+- Полный набор на стенде (`node tests/run.js`): **228 тестов — 223 pass,
+  0 fail, 5 skip, exit 0**.
+
+**Осталось.** Ревью-хвост исчерпан. Из архитектурного: app.js — 2063 строки
+(распил фронтенда — отдельная задача, рискованнее бэкенд-рефакторинга).
+На panel_beget — без docker, по указанию не трогали; код совместим, уедет
+следующей полной выкладкой.
+
 ## 2026-10-20 — Код-ревью панели и исправление находок (#1–#6)
 
 **Запрос.** «Сделай код ревью, напиши рекомендации по улучшению» → «давай

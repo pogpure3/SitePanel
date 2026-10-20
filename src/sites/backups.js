@@ -16,7 +16,11 @@
 
 const fs = require('fs');
 const path = require('path');
-const AdmZip = require('adm-zip');
+// archiver@8 — ESM-пакет ("type": "module"): CJS-интероп в зависимости от пути
+// и порядка загрузки отдаёт то класс, то namespace-объект (ловилось на живой
+// панели: «Archiver is not a constructor»). ZipArchive надёжен: формат 'zip'
+// зашит в класс, конструктор принимает только options.
+const { ZipArchive } = require('archiver');
 const { config } = require('../config');
 const store = require('../store');
 const manager = require('./manager');
@@ -88,12 +92,12 @@ async function freeBytes(dir) {
 }
 
 /**
- * Рекурсивно упаковать каталог сайта. node_modules пропускается: деплой
- * переустанавливает зависимости, а с ними бэкап разрастается в разы.
- * Симлинки не упаковываются: в архиве они небезопасны, а extractZip при
- * восстановлении уже умеет их отбрасывать — проще не класть.
+ * Рекурсивно добавить каталог сайта в потоковый архив. node_modules
+ * пропускается: деплой переустанавливает зависимости, а с ними бэкап
+ * разрастается в разы. Симлинки не упаковываются: в архиве они небезопасны,
+ * а extractZip при восстановлении уже умеет их отбрасывать — проще не класть.
  */
-function addDirToZip(zip, absDir, rel, stats) {
+function addDirToZip(archive, absDir, rel, stats) {
   const maxBytes = config.backupMaxSiteMb * 1048576;
   for (const d of fs.readdirSync(absDir, { withFileTypes: true })) {
     if (d.name === 'node_modules') continue;
@@ -101,7 +105,7 @@ function addDirToZip(zip, absDir, rel, stats) {
     const entryPath = rel ? `${rel}/${d.name}` : d.name;
     if (d.isSymbolicLink()) continue;
     if (d.isDirectory()) {
-      addDirToZip(zip, abs, entryPath, stats);
+      addDirToZip(archive, abs, entryPath, stats);
       continue;
     }
     if (!d.isFile()) continue;
@@ -113,7 +117,7 @@ function addDirToZip(zip, absDir, rel, stats) {
       throw err;
     }
     stats.files++;
-    zip.addLocalFile(abs, rel, d.name);
+    archive.append(fs.createReadStream(abs), { name: entryPath });
   }
 }
 
@@ -146,29 +150,69 @@ async function _createBackup(site, trigger) {
   }
   const t0 = Date.now();
 
-  // Упаковка в память adm-zip: лимит размера (и счётчики) проверяется прямо при
-  // обходе, до записи временного файла. Свободное место проверяем после обхода,
-  // но до writeZip — обрыв по месту не оставит недописанный архив в списке.
-  const zip = new AdmZip();
-  const stats = { files: 0, bytes: 0 };
-  addDirToZip(zip, dir, '', stats);
-  if (!stats.files) {
-    const err = new Error('Каталог сайта пуст — нечего бэкапить');
-    err.status = 400;
-    throw err;
+  // Консистентность: живой docker-сайт пишет в файлы прямо во время упаковки
+  // (SQLite/WAL — типичный случай), и архив получается из разновременных
+  // срезов — восстановление из него может дать битую базу. Останавливаем
+  // контейнеры на время копирования и поднимаем обратно (под локом сайта).
+  let containerWasRunning = false;
+  if (site.type === 'docker' && site.status === 'running') {
+    await manager.stopDockerContainers(site);
+    containerWasRunning = true;
   }
+  try {
+    return await packSiteBackup(site, dir, { trigger, t0, name: null });
+  } finally {
+    if (containerWasRunning) {
+      try { await manager.startDockerContainers(site); } catch (err) {
+        // Контейнер не поднялся: честный crashed вместо «работающего» сайта
+        // с мёртвым контейнером; следующий тик монитора подхватит.
+        manager.setStatusIf(site, ['running', 'starting'], 'crashed');
+        manager.appendLog(site, `[panel] ${ts()} контейнер не поднялся после бэкапа: ${err.message}`);
+      }
+    }
+  }
+}
+
+/** Упаковка каталога сайта в zip (без управления контейнерами). */
+async function packSiteBackup(site, dir, { trigger, t0 }) {
+  const name = stampName();
+  const tmpZip = path.join(config.tmpDir, `backup-${site.id}-${Date.now()}.zip`);
+  // Потоковая упаковка (archiver): архив пишется на диск напрямую, память не
+  // растёт с сайтом (in-memory adm-zip мёржил RSS на 512 МБ × сайтов).
+  // Лимит размера проверяется счётчиком прямо при обходе; free-место — до
+  // упаковки, недописанный tmp при любой ошибке удаляется.
   const free = await freeBytes(config.backupsDir);
-  if (free !== null && free < stats.bytes + 64 * 1048576) {
+  if (free !== null && free < config.backupMaxSiteMb * 1048576 + 64 * 1048576) {
     const err = new Error(`На диске мало места (свободно ${Math.round(free / 1048576)} МБ) — бэкап не создан`);
     err.status = 507;
     throw err;
   }
-
-  const name = stampName();
-  const tmpZip = path.join(config.tmpDir, `backup-${site.id}-${Date.now()}.zip`);
+  fs.mkdirSync(backupDir(site), { recursive: true });
+  const stats = { files: 0, bytes: 0 };
   try {
-    zip.writeZip(tmpZip);
-    fs.mkdirSync(backupDir(site), { recursive: true });
+    const archive = new ZipArchive({ zlib: { level: 9 } });
+    const written = new Promise((resolve, reject) => {
+      const out = fs.createWriteStream(tmpZip);
+      out.on('close', () => resolve(archive.pointer()));
+      out.on('error', reject);
+      archive.on('error', reject);
+      archive.on('warning', (w) => { if (w.code !== 'ENOENT') reject(w); });
+      archive.pipe(out);
+    });
+    addDirToZip(archive, dir, '', stats);
+    if (!stats.files) {
+      // abort() гасит архиватор, но НЕ закрывает writeStream: пустой tmp-zip,
+      // созданный open'ом стрима, оставался на диске до почасовой чистки.
+      archive.abort();
+      await new Promise((r) => { const o = fs.createWriteStream(tmpZip); o.on('open', () => { o.destroy(); r(); }); o.on('error', r); })
+        .catch(() => {})
+        .then(() => { try { fs.rmSync(tmpZip, { force: true }); } catch { /* уже нет */ } });
+      const err = new Error('Каталог сайта пуст — нечего бэкапить');
+      err.status = 400;
+      throw err;
+    }
+    await archive.finalize();
+    await written;
     fs.renameSync(tmpZip, path.join(backupDir(site), name));
   } catch (err) {
     // Недописанный tmp-zip иначе ждал бы почасовой чистки сутки (ENOSPC и т.п.).

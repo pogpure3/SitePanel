@@ -351,7 +351,7 @@ HTTP Basic при этом продолжает работать — для API,
 
 ## Стек
 
-Node.js ≥ 20 (без нативных модулей), express, http-proxy, acme-client, adm-zip, multer, selfsigned.
+Node.js ≥ 20 (без нативных модулей), express, http-proxy, acme-client, adm-zip (распаковка zip), archiver (потоковые бэкапы), js-yaml (валидация Docker-compose), multer, selfsigned.
 Фронтенд — vanilla JS без сборки.
 
 ## Журнал изменений

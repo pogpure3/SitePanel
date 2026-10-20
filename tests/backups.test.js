@@ -253,3 +253,20 @@ test('dueSites: выбор сайтов, которым пора на бэкап
     store.state.sites = [];
   }
 });
+
+test('пустой каталог сайта — 400, без битых архивов', async (t) => {
+  const { panel, tmp } = await withPanel(t, {});
+  const zip = makeZipAt(tmp, 'empty', { 'index.html': '<h1>x</h1>' });
+  const site = await uploadNew(panel, zip, 'bk-empty');
+  // Опустошаем каталог сайта: деплой без файлов невозможен, а сценарий
+  // «каталог пуст» бывает после ручной чистки/неудачной правки.
+  fs.readdirSync(path.join(panel.dataDir, 'sites', site.id)).forEach((f) =>
+    fs.rmSync(path.join(panel.dataDir, 'sites', site.id, f), { recursive: true, force: true }));
+
+  const r = await api(panel, 'POST', `/api/sites/${site.id}/backups`);
+  assert.equal(r.status, 400, JSON.stringify(r.data));
+  assert.match(String(r.data.error), /пуст/);
+  // tmp не засорён
+  const tmpFiles = fs.readdirSync(path.join(panel.dataDir, 'tmp')).filter((f) => f.startsWith('backup-'));
+  assert.equal(tmpFiles.length, 0, 'мусорный tmp-zip остался: ' + tmpFiles.join(','));
+});
