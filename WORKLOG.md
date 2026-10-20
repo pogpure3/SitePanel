@@ -8,6 +8,24 @@
 
 ---
 
+## 2026-10-20 — Обновление api-progression на панели (update-git → 49129ae)
+
+**Запрос.** «api-progression обнови на панели» (повторно).
+
+**Диагностика.** Новый коммит после d96c84d: `49129ae` «Robust prod import:
+background jobs, serving pause, bounded index walks».
+
+**Изменения — panel_test.** `POST /api/sites/3ac49e2f0d64/update-git` (Basic,
+admin): клон → пересборка → recreate контейнера pumping-api. Код, nginx и
+сертификат не менялись.
+
+**Проверка.** md5 `server.js` на стене = md5 из репо на 49129ae
+(1dedea58…); контейнер Up (Recreated); `deploy/data` (pumping.db + WAL)
+на месте; снаружи: кабинет 200, `/api/word/biglist?token=***` → 200 с
+данными (старый токен работает), без токена → 401.
+
+**Осталось.** Прежние позиции (public_base_url кабинета не задан).
+
 ## 2026-10-20 — Обновление api-progression на панели (update-git → d96c84d)
 
 **Запрос.** «api-progression обнови на панели».
