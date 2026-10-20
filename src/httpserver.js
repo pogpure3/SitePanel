@@ -555,7 +555,13 @@ function createServers() {
       return socket.destroy();
     }
     sanitizeForwardHeaders(req, hostOf(req));
-    proxy.ws(req, socket, head, { target: `http://127.0.0.1:${port}` });
+    // H-14 и для WS: закэшированный Basic панели не должен уходить в сайт
+    // (HTTP-путь чистит stripPanelAuthorization, апгрейд раньше пропускал).
+    stripPanelAuthorization(req)
+      .catch(() => {})
+      .then(() => {
+        proxy.ws(req, socket, head, { target: `http://127.0.0.1:${port}` });
+      });
   };
   httpServer.on('upgrade', routeUpgrade);
   httpsServer.on('upgrade', routeUpgrade);

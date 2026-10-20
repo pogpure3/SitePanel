@@ -119,10 +119,22 @@ function addDirToZip(zip, absDir, rel, stats) {
 
 /**
  * Полный бэкап каталога сайта. Возвращает метаданные созданного архива.
+ * Все бэкапы (плановые и ручные, любые сайты) гоняются через глобальную
+ * очередь: adm-zip держит архив в памяти, а обход дерева синхронный —
+ * параллельные упаковки мёржили RSS (лимит × число сайтов) и вместе
+ * блокировали event loop (панель, прокси, health-checks замирали).
  * @param {'manual'|'scheduled'} trigger
  */
 function createBackup(site, trigger) {
-  return withSiteLock(site.id, () => _createBackup(site, trigger));
+  return serializeBackupRun(() => withSiteLock(site.id, () => _createBackup(site, trigger)));
+}
+
+// Очередь бэкапов: хвост не «залипает» на ошибке предыдущего запуска.
+let backupsChain = Promise.resolve();
+function serializeBackupRun(fn) {
+  const run = backupsChain.then(fn, fn);
+  backupsChain = run.then(() => {}, () => {});
+  return run;
 }
 
 async function _createBackup(site, trigger) {
@@ -154,9 +166,15 @@ async function _createBackup(site, trigger) {
 
   const name = stampName();
   const tmpZip = path.join(config.tmpDir, `backup-${site.id}-${Date.now()}.zip`);
-  zip.writeZip(tmpZip);
-  fs.mkdirSync(backupDir(site), { recursive: true });
-  fs.renameSync(tmpZip, path.join(backupDir(site), name));
+  try {
+    zip.writeZip(tmpZip);
+    fs.mkdirSync(backupDir(site), { recursive: true });
+    fs.renameSync(tmpZip, path.join(backupDir(site), name));
+  } catch (err) {
+    // Недописанный tmp-zip иначе ждал бы почасовой чистки сутки (ENOSPC и т.п.).
+    try { fs.rmSync(tmpZip, { force: true }); } catch { /* уже нет */ }
+    throw err;
+  }
 
   const sizeBytes = fs.statSync(path.join(backupDir(site), name)).size;
   const meta = {

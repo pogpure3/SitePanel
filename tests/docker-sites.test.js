@@ -123,7 +123,51 @@ test('detectContainerPort: EXPOSE и короткий ports, длинный си
   const long = makeProjectDir(t, {
     'docker-compose.yml': 'services:\n  app:\n    build: .\n    ports:\n      - target: 3000\n        published: 8080\n',
   });
-  assert.equal(detectContainerPort(long, 'compose'), null, 'длинный синтаксис не парсим — порт спросим у пользователя');
+  assert.equal(detectContainerPort(long, 'compose'), 3000, 'длинный синтаксис теперь разбирается YAML-парсером');
+});
+
+test('validateComposeSafety: опасные конструкции отвергаются, безопасные проходят', (t) => {
+  const { validateComposeSafety } = require('../src/sites/manager');
+
+  const ok = makeProjectDir(t, {
+    'docker-compose.yml': [
+      'services:',
+      '  app:',
+      '    build: .',
+      '    ports:',
+      '      - "7011:7011"',
+      '    volumes:',
+      '      - ./data:/app/data',
+      '      - db:/var/lib/db',
+      '  side:',
+      '    image: redis:7',
+      'volumes:',
+      '  db: {}',
+    ].join('\n'),
+  });
+  const res = validateComposeSafety(ok, 'docker-compose.yml');
+  assert.deepEqual(res.names, ['app', 'side']);
+
+  const cases = [
+    ['network_mode: host', 'services:\n  a:\n    image: x\n    network_mode: host\n'],
+    ['network_mode: container:', 'services:\n  a:\n    image: x\n    network_mode: "container:abc"\n'],
+    ['privileged', 'services:\n  a:\n    image: x\n    privileged: true\n'],
+    ['pid: host', 'services:\n  a:\n    image: x\n    pid: host\n'],
+    ['cap_add', 'services:\n  a:\n    image: x\n    cap_add: [SYS_ADMIN]\n'],
+    ['devices', 'services:\n  a:\n    image: x\n    devices: ["/dev/sda:/dev/sda"]\n'],
+    ['абсолютный bind', 'services:\n  a:\n    image: x\n    volumes:\n      - /:/host\n'],
+    ['docker.sock', 'services:\n  a:\n    image: x\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n'],
+    ['bind наружу сайта', 'services:\n  a:\n    image: x\n    volumes:\n      - ../../etc:/etc\n'],
+    ['build.context вне сайта', 'services:\n  a:\n    build:\n      context: ../../..\n'],
+    ['external сеть', 'networks:\n  hostnet:\n    external: true\nservices:\n  a:\n    image: x\n'],
+    ['include', 'include:\n  - other.yml\nservices:\n  a:\n    image: x\n'],
+    ['битый YAML', 'services: [ Broken\n'],
+    ['нет services', 'version: "3"\n'],
+  ];
+  for (const [label, content] of cases) {
+    const dir = makeProjectDir(t, { 'docker-compose.yml': content });
+    assert.throws(() => validateComposeSafety(dir, 'docker-compose.yml'), /compose отклонён/, `должен быть отказ: ${label}`);
+  }
 });
 
 test('composeFirstService: первый сервис верхнего уровня, вложенность игнорируется', () => {
@@ -356,5 +400,177 @@ test('интеграция: deploy/-layout (Dockerfile+compose в подката
   await waitForSiteAnswer(panel, site, 'd2', 'после обновления отвечает d2', 240000);
 
   const del = await api(panel, 'DELETE', `/api/sites/${site.id}`);
+  assert.equal(del.status, 200);
+});
+
+
+test('интеграция: безопасность compose — порты вторых сервисов сбрасываются, host-bind отвергается', { timeout: 8 * 60 * 1000 }, async (t) => {
+  if (!hasDocker) return t.skip('docker CLI недоступен — интеграционный тест скипается');
+  const panel = await startPanel({});
+  t.after(async () => { await panel.stop(); });
+
+  // Второй сервис пытается опубликоваться на 0.0.0.0 в обход панели —
+  // override обязан сбросить его ports, наружу ничего не уходит.
+  const site = await uploadZip(panel, os.tmpdir(), 'compose-sec', {
+    'docker-compose.yml': [
+      'services:',
+      '  app:',
+      '    build: .',
+      '  side:',
+      '    image: alpine:3.20',
+      '    command: ["sleep", "600"]',
+      '    ports:',
+      '      - "0.0.0.0:31337:31337"',
+    ].join('\n'),
+    Dockerfile: DOCKERFILE('sec1'),
+    'server.js': SERVER_JS('sec1'),
+  });
+  await waitForSiteAnswer(panel, site, 'sec1', 'compose-sec отвечает', 240000);
+  const { execSync } = require('child_process');
+  const portsOut = execSync(
+    'docker ps --filter label=com.docker.compose.project=sitepanel-' + site.id + ' --format "{{.Ports}}"',
+    { encoding: 'utf8', timeout: 15000 });
+  assert.ok(!portsOut.includes('31337'), 'порт стороннего сервиса опубликован: ' + portsOut.trim());
+  assert.ok(portsOut.includes('127.0.0.1:' + site.port + '->'), 'публикация панели на месте: ' + portsOut.trim());
+
+  // Host-bind / — деплой обязан упасть с внятной ошибкой ДО запуска.
+  const evilZip = path.join(os.tmpdir(), 'compose-evil.zip');
+  makeZip(path.join(os.tmpdir(), 'compose-evil'), {
+    'docker-compose.yml': 'services:\n  a:\n    image: alpine:3.20\n    volumes:\n      - /:/host\n',
+  }, evilZip);
+  const form = new FormData();
+  form.append('file', new Blob([fs.readFileSync(evilZip)]), 'compose-evil.zip');
+  form.append('name', 'compose-evil');
+  const evilRes = await fetch(panel.base + '/api/sites', {
+    method: 'POST',
+    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+    body: form,
+  });
+  const evilData = await evilRes.json();
+  assert.equal(evilRes.status, 400, 'деплой host-bind должен упасть: ' + JSON.stringify(evilData));
+  assert.match(String(evilData.error), /compose отклонён.*абсолютный bind/);
+
+  const del = await api(panel, 'DELETE', '/api/sites/' + site.id);
+  assert.equal(del.status, 200);
+});
+
+test('интеграция: monitor самолечит crashed docker-сайта (docker stop в обход панели)', { timeout: 8 * 60 * 1000 }, async (t) => {
+  if (!hasDocker) return t.skip('docker CLI недоступен — интеграционный тест скипается');
+  const panel = await startPanel({ PANEL_MONITOR_TICK_MS: '700' });
+  t.after(async () => { await panel.stop(); });
+  const { execSync } = require('child_process');
+  const docker = (cmd) => execSync(cmd, { encoding: 'utf8', timeout: 60000 });
+
+  const site = await uploadZip(panel, os.tmpdir(), 'selfheal', {
+    Dockerfile: DOCKERFILE('sh1'),
+    'server.js': SERVER_JS('sh1'),
+  });
+  await waitForSiteAnswer(panel, site, 'sh1', 'сайт отвечает', 240000);
+
+  // Убиваем контейнер в обход панели: монитор обязан перевести сайт в crashed...
+  docker('docker rm -f sitepanel-' + site.id);
+  const crashed = await waitFor(async () => {
+    const r = await api(panel, 'GET', '/api/sites/' + site.id);
+    return r.data && r.data.status === 'crashed' ? r.data : null;
+  }, { timeout: 30000, interval: 700, label: 'монитор увидел смерть контейнера' });
+  assert.equal(crashed.status, 'crashed');
+
+  // Поднимаем контейнер вручную (эмуляция restart-политики docker) —
+  // монитор обязан вернуть running без рестарта панели.
+  docker('docker run -d --name sitepanel-' + site.id + ' --restart unless-stopped -p 127.0.0.1:' + site.port + ':' + site.containerPort + ' sitepanel-' + site.id);
+  const healed = await waitFor(async () => {
+    const r = await api(panel, 'GET', '/api/sites/' + site.id);
+    return r.data && r.data.status === 'running' ? r.data : null;
+  }, { timeout: 30000, interval: 700, label: 'монитор вернул running' });
+  assert.equal(healed.status, 'running');
+
+  const del = await api(panel, 'DELETE', '/api/sites/' + site.id);
+  assert.equal(del.status, 200);
+});
+
+test('интеграция: неудачное обновление docker-сайта откатывается с пересборкой образа', { timeout: 10 * 60 * 1000 }, async (t) => {
+  if (!hasDocker) return t.skip('docker CLI недоступен — интеграционный тест скипается');
+  const panel = await startPanel({});
+  t.after(async () => { await panel.stop(); });
+
+  const site = await uploadZip(panel, os.tmpdir(), 'docker-rollback', {
+    Dockerfile: DOCKERFILE('rb1'),
+    'server.js': SERVER_JS('rb1'),
+  });
+  await waitForSiteAnswer(panel, site, 'rb1', 'v1 отвечает', 240000);
+
+  // «Сломанная» v2: собирается, но приложение не слушает порт — старт-ожидание
+  // проваливается, панель обязана откатить И каталог, И образ.
+  const brokenDockerfile = [
+    'FROM node:22-alpine',
+    'CMD ["node", "-e", "setInterval(()=>{},1000)"]',
+  ].join('\n');
+  const zip2 = path.join(os.tmpdir(), 'docker-rollback-v2.zip');
+  makeZip(path.join(os.tmpdir(), 'docker-rollback-v2'), {
+    Dockerfile: brokenDockerfile,
+    'server.js': SERVER_JS('rb2'),
+  }, zip2);
+  const form = new FormData();
+  form.append('file', new Blob([fs.readFileSync(zip2)]), 'docker-rollback-v2.zip');
+  const upd = await fetch(panel.base + '/api/sites/' + site.id + '/update', {
+    method: 'POST',
+    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+    body: form,
+  });
+  const updData = await upd.json();
+  assert.equal(upd.status, 200, JSON.stringify(updData));
+  assert.equal(updData.ok, false, 'обновление обязано провалиться');
+  assert.equal(updData.result && updData.result.rolledBack, true, 'нет отката: ' + JSON.stringify(updData.result));
+
+  // После отката сайт ОБЯЗАН отвечать старой версией (образ пересобран).
+  await waitForSiteAnswer(panel, site, 'rb1', 'после отката отвечает v1 (пересборка)', 240000);
+
+  const del = await api(panel, 'DELETE', '/api/sites/' + site.id);
+  assert.equal(del.status, 200);
+});
+
+test('интеграция: npm-скрипты docker-проекта не исполняются на хосте', { timeout: 8 * 60 * 1000 }, async (t) => {
+  if (!hasDocker) return t.skip('docker CLI недоступен — интеграционный тест скипается');
+  const panel = await startPanel({});
+  t.after(async () => { await panel.stop(); });
+
+  const marker = path.join(os.tmpdir(), 'sp-hostnpm-' + Date.now() + '.marker');
+  const site = await uploadZip(panel, os.tmpdir(), 'docker-noscript', {
+    Dockerfile: DOCKERFILE('ns1'),
+    'server.js': SERVER_JS('ns1'),
+    'package.json': JSON.stringify({
+      name: 'evil', version: '1.0.0', scripts: { start: 'node server.js' },
+      postinstall: `node -e "require('fs').writeFileSync(${JSON.stringify(marker)},'x')"`,
+    }),
+    'package-lock.json': JSON.stringify({ name: 'evil', version: '1.0.0', lockfileVersion: 3, packages: { '': {} } }),
+  });
+  assert.equal(site.type, 'docker');
+  await waitForSiteAnswer(panel, site, 'ns1', 'сайт отвечает', 240000);
+  assert.equal(fs.existsSync(marker), false, 'postinstall исполнился на хосте — изоляция нарушена');
+
+  const del = await api(panel, 'DELETE', '/api/sites/' + site.id);
+  assert.equal(del.status, 200);
+});
+
+test('интеграция: PATCH containerPort применяется пересозданием немедленно', { timeout: 8 * 60 * 1000 }, async (t) => {
+  if (!hasDocker) return t.skip('docker CLI недоступен — интеграционный тест скипается');
+  const panel = await startPanel({});
+  t.after(async () => { await panel.stop(); });
+
+  // Приложение слушает process.env.PORT (SERVER_JS), docker run передаёт
+  // PORT=containerPort: смена порта обязана пересоздать контейнер и работать.
+  const site = await uploadZip(panel, os.tmpdir(), 'docker-port', {
+    Dockerfile: DOCKERFILE('cp1'),
+    'server.js': SERVER_JS('cp1'),
+  });
+  assert.equal(site.containerPort, 3000, 'EXPOSE 3000');
+  await waitForSiteAnswer(panel, site, 'cp1', 'v1 на 3000', 240000);
+
+  const patch = await api(panel, 'PATCH', '/api/sites/' + site.id, { containerPort: 3105 });
+  assert.equal(patch.status, 200, JSON.stringify(patch.data));
+  assert.equal(patch.data.containerPortApplied, 'restarted');
+  await waitForSiteAnswer(panel, site, 'cp1', 'после смены порта контейнера', 120000);
+
+  const del = await api(panel, 'DELETE', '/api/sites/' + site.id);
   assert.equal(del.status, 200);
 });

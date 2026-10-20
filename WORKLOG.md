@@ -8,6 +8,104 @@
 
 ---
 
+## 2026-10-20 — Код-ревью панели и исправление находок (#1–#6)
+
+**Запрос.** «Сделай код ревью, напиши рекомендации по улучшению» → «давай
+чинить по порядку». Ревью проведено независимым агентом по 5 осям (правильность,
+читаемость, архитектура, безопасность, производительность) на код этой сессии;
+подтверждено чтением кода. Исправлено всё, что согласовано («по порядку»).
+
+**Диагностика — главные находки ревью (до фиксов).**
+1. CRITICAL: compose-файл пользователя — компрометация хоста (ports 0.0.0.0
+   у вторых сервисов; bind `/`, docker.sock, network_mode: host, privileged,
+   pid: host, cap_add, devices, external-сети, include — не проверялись).
+2. Required: docker-сайт в crashed не самолечился никогда (isRunning для
+   не-node = status; ветки монитора под isRunning).
+3. Required: сбой docker CLI трактовался как «контейнер умер» (null→false).
+4. Required: автооткат docker-деплоя не пересобирал образ (docker start со
+   свежесобранным битым образом; тег sitepanel-<id> перезаписан).
+5. Required: npm-скрипты docker-проектов (postinstall!) исполнялись на хосте
+   от имени панели (npmInstall до detectType).
+6. Required: параллельные плановые бэкапы мёржили RSS и блокировали event
+   loop (adm-zip в памяти, синхронный обход; tick без сериализации).
+Плюс Optional/Nit: PATCH containerPort не применялся; WS-апгрейд пропускал
+Authorization панели (H-14 не добит для WS); мусорный tmp-zip при ошибке
+записи; !override требует compose >= 2.24; длинный синтаксис ports не
+парсился; waitListening обманывался docker-proxy (TCP на мёртвый бэкенд).
+
+**Изменения.**
+- `src/sites/manager.js`: `execDocker` (вместо execDockerQuiet) — {code,out},
+  code -1 при сбое/таймауте; `dockerContainerState` → running|stopped|missing|
+  unknown (вместо dockerContainerRunning; снята с экспорта); compose-ветка
+  через label; `validateComposeSafety` (js-yaml) + composeFail (400);
+  override теперь сбрасывает ports ВСЕХ сервисов кроме первого (`!reset`);
+  `detectContainerPort` — js-yaml (короткий + длинный синтаксис);
+  `assertDockerAvailable` проверяет compose >= 2.24; гейт
+  `PANEL_DOCKER_SITES=0` в `finalizeDeploy` и `_startDocker`; `_startDocker`
+  валидирует compose на каждом старте (не только при создании override) и
+  ждёт порт минимум 30с; `waitListening` для docker — HTTP-проверка
+  (`proc.portHttpAnswers`); `startAfterDeploy` для docker — rebuild+recreate
+  при автооткате; `applyContainerPort` (заперт локом, stop → recreate →
+  start); скип `npmInstall` для docker-проектов в zip-деплое и git-деплое
+  (включая ветку подкаталога: подкаталог поднимается на уровень без npm).
+- `src/sites/proc.js`: `portHttpAnswers` (HEAD-запрос, любой статус = жив).
+- `src/monitor.js`: docker-ветки по три-состоянию; unknown — только warn;
+  самолечение crashed→running при dockerContainerState=running на тике.
+- `src/httpserver.js`: WS-апгрейд гоняет `stripPanelAuthorization` (H-14).
+- `src/sites/backups.js`: глобальная очередь `serializeBackupRun` (все бэкапы
+  строго по одному); tmp-zip убирается при ошибке writeZip/rename.
+- `src/admin/routes.js`: PATCH containerPort → `manager.applyContainerPort`,
+  в ответе `containerPortApplied: 'restarted'|'failed'`, при failed — 500.
+- `src/admin/public/app.js`: тост честно говорит «сайт перезапущен».
+- `src/config.js`: `dockerSitesEnabled` (`PANEL_DOCKER_SITES`, по умолчанию 1).
+- Зависимость: **js-yaml ^4.1.0** (package.json + lock; на стенде
+  `npm install --omit=dev --omit=optional`).
+- README (изоляция/порты/PANEL_DOCKER_SITES), CHANGELOG (Безопасность +3,
+  Исправлено +5).
+
+**Найдено на живом стенде в процессе.** Первая версия `dockerContainerState`
+имела баг `every()`: `inspect`-вывод "true\n" после split давал пустой хвост,
+«живой контейнер» считался stopped → монитор ронял живой сайт apitest в
+crashed на каждом тике (обнаружено по живому сайту: status=crashed при
+health=up; фикс — фильтр пустых строк). Также выловлен обман TCP-wait
+зондом: контейнер с мёртвым приложением принимал TCP → сломанный деплой
+«успешен»; фикс — HTTP-wait, подтверждён тестом-откатом.
+Отладочные правки (console.error в catch тика) внесены на стену и сняты;
+финальные md5 monitor.js/manager.js локаль = стенд.
+
+**Выкладка — panel_test.** Бэкап кода ДО:
+`/root/sitepanel-code-backup-20261020-212514.tar.gz`; заменены 8 файлов
+(src/config.js, src/monitor.js, src/httpserver.js, src/sites/manager.js,
+src/sites/backups.js, src/admin/routes.js, src/admin/public/app.js,
+tests/docker-sites.test.js) + package.json/package-lock.json; `npm install
+--omit=dev --omit=optional` (js-yaml 4.3.2); node --check всех; md5
+manager/monitor/proc совпали; рестарт → active.
+
+**Проверка.**
+- Локально: lint чист; 227 тестов — 203 pass, 3 fail (предсозданные
+  Windows-сбои T-32/T-43/T-44), интеграции скипнуты (docker на Windows-машине
+  нет).
+- На стенде: `tests/docker-sites.test.js` — **14/14**, включая новые:
+  безопасность compose (порт стороннего сервиса НЕ опубликован, host-bind
+  `/` → 400 «compose отклонён»), самолечение (docker rm -f в обход панели →
+  crashed → docker run руками → running без рестарта панели), автооткат с
+  пересборкой (сломанная v2 → rolledBack=true → сайт отвечает v1), host-npm
+  (postinstall НЕ оставил маркера на хосте), PATCH containerPort →
+  restarted и сайт отвечает на новом порту.
+- Живой сайт apitest: после фикса every() самолечился без ручного
+  вмешательства — running, health up; снаружи 200; pqr 200.
+- Полный набор на стенде (`node tests/run.js`): **227 тестов — 222 pass,
+  0 fail, 5 skip, exit 0** (все 8 docker-интеграций выполнились по-настоящему).
+
+**Осталось.** Из ревью не закрыто (осознанно, по согласованию «по порядку»
+фиксим дальше при желании): бэкап живого docker-сайта снимает SQLite
+неконсистентно (документировано в ревью; режим «консистентный бэкап» —
+развитие); container_name в compose может конфликтовать между двумя сайтами
+из одного репо; генерация .dockerignore в каталоге сайта (COPY . . утащит
+.env в слои); вынос docker-блока manager.js (2120 строк) в src/sites/docker.js;
+потоковая zip-запись вместо in-memory adm-zip. На panel_beget — по-прежнему
+без docker; код совместим.
+
 ## 2026-10-20 — Обновление api-progression на панели (update-git → f53ccd4)
 
 **Запрос.** «api-progression обнови на панели» (третий прогон).

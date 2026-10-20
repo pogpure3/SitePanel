@@ -99,6 +99,11 @@ const config = {
   // внутри может идти долго; зависший билд не должен держать блокировку сайта
   // вечно (та же логика, что PANEL_INSTALL_TIMEOUT_MIN у node-сайтов).
   dockerBuildTimeoutMin: posInt(process.env.PANEL_DOCKER_BUILD_TIMEOUT_MIN, 10, 1, 1440),
+  // Выключатель Docker-сайтов целиком: сборка чужого Dockerfile исполняет
+  // RUN-команды на хосте через docker (у панели права docker-группы/root).
+  // PANEL_DOCKER_SITES=0 — деплой и запуск docker-типа отвергаются с внятной
+  // ошибкой (по образцу PANEL_TERMINAL / PANEL_BACKUPS).
+  dockerSitesEnabled: bool(process.env.PANEL_DOCKER_SITES, true),
 };
 
 // Пользовательский config.json перекрывает значения по умолчанию.

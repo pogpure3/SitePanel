@@ -308,20 +308,33 @@ router.patch('/sites/:id', wrap(async (req, res) => {
   if (req.body.autoStart !== undefined) site.autoStart = !!req.body.autoStart;
   // containerPort: порт приложения внутри контейнера docker-сайта. null —
   // заново детектировать из EXPOSE/ports при следующем деплое.
+  let portApplied = null;
   if (req.body.containerPort !== undefined) {
-    if (req.body.containerPort === null || req.body.containerPort === '') {
-      site.containerPort = null;
-    } else {
-      const cp = Number(req.body.containerPort);
+    let cp = null;
+    if (req.body.containerPort !== null && req.body.containerPort !== '') {
+      cp = Number(req.body.containerPort);
       if (!Number.isInteger(cp) || cp <= 0 || cp >= 65536) {
         return res.status(400).json({ error: 'containerPort: целое число 1..65535 или null' });
       }
+    }
+    if (site.type === 'docker' && cp !== (site.containerPort || null)) {
+      site.containerPort = cp;
+      // Применяем сразу: пересоздание контейнеров с новой публикацией.
+      // Раньше порт «применялся» только при следующем деплое.
+      const r = await manager.applyContainerPort(site);
+      portApplied = r && r.ok ? 'restarted' : 'failed';
+      if (portApplied === 'failed') {
+        return res.status(500).json({ error: 'Порт сохранён, но пересоздание контейнера не удалось: ' + (r.error || '') });
+      }
+    } else {
       site.containerPort = cp;
     }
   }
   // flush(), а не save(): ошибка записи должна вернуть 5xx, а не «ок» через 250 мс.
   store.flush();
-  res.json(await serializeSite(site));
+  const out = await serializeSite(site);
+  if (portApplied) out.containerPortApplied = portApplied;
+  res.json(out);
 }));
 
 /* ---------- Домены ---------- */

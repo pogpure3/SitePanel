@@ -1061,8 +1061,9 @@ function patchDetail(site) {
       if (v === null) return;
       const body = { containerPort: v.trim() === '' ? null : Number(v) };
       try {
-        await api('PATCH', `/api/sites/${site.id}`, body);
-        toast(body.containerPort ? 'Порт контейнера сохранён — перезапустите сайт, чтобы он применился' : 'Порт контейнера сброшен — определится при следующем деплое', 'success');
+        const r = await api('PATCH', `/api/sites/${site.id}`, body);
+        if (r.containerPortApplied === 'restarted') toast('Порт контейнера применён — сайт перезапущен', 'success');
+        else toast(body.containerPort ? 'Порт контейнера сохранён — применится при запуске' : 'Порт контейнера сброшен — определится при следующем деплое', 'success');
         render();
       } catch (err) {
         toast(err.message, 'error');

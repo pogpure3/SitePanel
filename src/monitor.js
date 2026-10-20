@@ -89,10 +89,22 @@ async function checkSite(site) {
   }
   // Docker: контейнер переживает панель (restart policy) и может умереть сам —
   // у панели нет процесса, чей exit выставил бы crashed (M-02-механика node).
-  // Сверяемся с docker inspect: контейнера нет/не running → crashed; политика
-  // рестарта docker поднимет контейнер, следующий тик вернёт running.
-  if (site.type === 'docker' && site.status === 'running' && !(await manager.dockerContainerRunning(site))) {
-    manager.setStatusIf(site, 'running', 'crashed');
+  // unknown (docker не ответил) статусом НЕ считается: сбой демона не должен
+  // ронять живые сайты.
+  if (site.type === 'docker' && site.status === 'running') {
+    const st = await manager.dockerContainerState(site);
+    if (st === 'stopped' || st === 'missing') {
+      manager.setStatusIf(site, 'running', 'crashed');
+    } else if (st === 'unknown') {
+      console.warn(`[monitor] docker не ответил для сайта ${site.id} — статус не меняется`);
+    }
+  }
+  // Самолечение docker: restart-политика docker подняла контейнер, а статус
+  // завис в crashed — возвращаем running (раньше зависал навсегда до рестарта
+  // панели: isRunning для docker = status, и ветки выше его не видели).
+  if (site.type === 'docker' && site.status === 'crashed') {
+    const st = await manager.dockerContainerState(site);
+    if (st === 'running') manager.setStatusIf(site, 'crashed', 'running');
   }
   // Самолечение: процесс жив, а статус завис в crashed (например, после сбоя панели).
   if (site.status === 'crashed' && manager.isRunning(site)) {

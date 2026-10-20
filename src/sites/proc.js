@@ -17,6 +17,7 @@
 const fs = require('fs');
 const path = require('path');
 const net = require('net');
+const http = require('http');
 const { execFile } = require('child_process');
 const { config } = require('../config');
 
@@ -281,6 +282,28 @@ function portAnswers(port) {
   });
 }
 
+/**
+ * Порт отвечает на HTTP-запрос? true при ЛЮБОМ статусе (включая 4xx/5xx) —
+ * важно лишь, что приложение сформировало ответ. Нужен для docker-сайтов:
+ * docker-proxy принимает TCP-соединение даже когда приложение в контейнере
+ * мёртво, поэтому «connect» доказывает лишь наличие прокси, а не живость
+ * сайта (ревью-находка: сломанный деплой признавался успешным).
+ */
+function portHttpAnswers(port, timeoutMs = 2500) {
+  return new Promise((resolve) => {
+    const req = http.request(
+      { host: '127.0.0.1', port: Number(port), path: '/', method: 'HEAD' },
+      (res) => {
+        res.resume();
+        resolve(true);
+      }
+    );
+    req.once('error', () => resolve(false));
+    req.setTimeout(timeoutMs, () => { req.destroy(); resolve(false); });
+    req.end();
+  });
+}
+
 module.exports = {
   IS_WIN,
   pidFileFor,
@@ -296,4 +319,5 @@ module.exports = {
   portPidsViaProc,
   portBusy,
   portAnswers,
+  portHttpAnswers,
 };

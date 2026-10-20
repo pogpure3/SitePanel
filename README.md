@@ -47,7 +47,7 @@ PANEL_HTTP_PORT=8080 PANEL_HTTPS_PORT=8443 PANEL_ADMIN_PORT=3000 npm start
 `PANEL_INTERNAL_PORT_FROM` (внутренние порты node-приложений, по умолчанию с 10000),
 `PANEL_RESTART_MAX_ATTEMPTS` (5), `PANEL_RESTART_STABLE_SEC` (60), `PANEL_RESTART_COOLDOWN_MIN` (10),
 `PANEL_INSTALL_TIMEOUT_MIN` (10), `PANEL_MAX_UNCOMPRESSED_MB` (2048), `PANEL_MAX_ZIP_ENTRIES` (50000),
-`PANEL_DOCKER_BUILD_TIMEOUT_MIN` (10 — бюджет сборки Docker-сайтов),
+`PANEL_DOCKER_BUILD_TIMEOUT_MIN` (10 — бюджет сборки Docker-сайтов), `PANEL_DOCKER_SITES` (1; `0` выключает Docker-сайты),
 `PANEL_BACKUPS` (1; `0` выключает плановые бэкапы), `PANEL_BACKUP_CHECK_SEC` (60),
 `PANEL_BACKUP_MAX_MB` (512 — потолок размера сайта, упаковываемого в бэкап).
 
@@ -118,12 +118,20 @@ app.listen(port, '127.0.0.1');
 - **Порты**: панель выделяет свободный хост-порт и публикует контейнер только на
   `127.0.0.1` — наружу трафик идёт через реверс-прокси панели (домены, SSL, WS работают
   как у Node.js-сайтов). Порт приложения внутри контейнера берётся из `EXPOSE`
-  (Dockerfile) или `ports` (compose, короткий синтаксис), иначе 3000; меняется в
-  карточке сайта. У compose публикуется **первый сервис** файла: панель генерирует
+  (Dockerfile) или `ports` (compose, короткий и длинный синтаксис), иначе 3000;
+  меняется в карточке сайта и применяется пересозданием контейнера сразу. У compose
+  публикуется **первый сервис** файла: панель генерирует
   `<compose-файл>.sitepanel-override.yml` с публикацией `127.0.0.1:<порт>:<порт
-  контейнера>` (тег `!override` заменяет пользовательский `ports` — свои публикации
-  наружу, в обход панели и файрвола, панель не пускает). Поддерживаются верхнеуровневые
-  compose-файлы без `includes`; контейнеры и образы именуются префиксом `sitepanel-<id>`.
+  контейнера>` (тег `!override` заменяет пользовательский `ports`), а порты
+  **всех остальных сервисов сбрасываются** (`!reset`) — публикации в обход панели
+  и файрвола невозможны. Контейнеры и образы именуются префиксом `sitepanel-<id>`.
+- **Изоляция**: compose-файл валидируется при деплое и запуске — отвергаются
+  `network_mode: host`/`container:`, `privileged`, `pid`/`ipc: host`, `cap_add`,
+  `devices`, внешние сети, `include`/внешний `extends`, bind-маунты и
+  `build.context` вне каталога сайта (в том числе `/var/run/docker.sock`).
+  npm-скрипты docker-проектов (`postinstall` и пр.) на хосте НЕ исполняются —
+  зависимости ставятся только внутри образа. Docker-сайты целиком выключаются
+  `PANEL_DOCKER_SITES=0`.
 - **Жизненный цикл**: контейнер переживает рестарт панели (restart policy
   `unless-stopped` у Dockerfile-проектов); статус синхронизируется health-check'ом и
   `docker inspect`. Откат версии и восстановление из бэкапа пересобирают образ.
