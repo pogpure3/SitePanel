@@ -8,6 +8,25 @@
 
 ---
 
+## 2026-10-20 — Обновление api-progression на панели (update-git → f53ccd4)
+
+**Запрос.** «api-progression обнови на панели» (третий прогон).
+
+**Диагностика.** Новый коммит после 49129ae: `f53ccd4` «Chunked import
+upload: bypasses proxy body-size limits (prod 413)» — чанковая загрузка
+импорта; сочетается со снятым лимитом nginx (запись выше).
+
+**Изменения — panel_test.** `POST /api/sites/3ac49e2f0d64/update-git`
+(Basic, admin): клон → пересборка → recreate pumping-api. Конфиги стенда
+не менялись.
+
+**Проверка.** md5 `server.js` на стене = md5 из репо на f53ccd4
+(6c85f134…); контейнер Up; `deploy/data` (pumping.db + WAL) на месте;
+снаружи: кабинет 200, `/api/word/biglist?token=***` → 200 с данными,
+без токена → 401.
+
+**Осталось.** Прежние позиции (public_base_url кабинета не задан).
+
 ## 2026-10-20 — client_max_body_size 2g на вхосте apitest (panel_test)
 
 **Запрос.** Сниппет nginx («client_max_body_size 2g; // или 0 = без лимита»)
