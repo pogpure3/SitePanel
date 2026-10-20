@@ -8,6 +8,28 @@
 
 ---
 
+## 2026-10-20 — Обновление api-progression на панели (update-git → d96c84d)
+
+**Запрос.** «api-progression обнови на панели».
+
+**Диагностика.** В репо два новых коммита после развёрнутого 76d45ae:
+`5bbb95b` (редизайн кабинета под layout FoxReport) и `d96c84d` (streaming
+bulk import, index-seek выборка, без лимитов).
+
+**Изменения — panel_test.** `POST /api/sites/3ac49e2f0d64/update-git` (Basic,
+логин admin): клон → пересборка образа → compose recreate контейнера
+pumping-api. Код, конфиги nginx и сертификат не менялись.
+
+**Проверка.** Сайт running, health up; контейнер Recreated→Up, публикация
+`127.0.0.1:10000->7011`; md5 `lib/db.js` на стене = md5 из репо на d96c84d;
+`deploy/data` (SQLite, pumping.db + WAL ~2,4 МБ — импортированная база слов)
+пережил подмену каталога (PRESERVED_DIRS); снаружи: https → 200,
+`/api/word/biglist?token=***` → 200 с реальными словами (старый API-токен
+сохранён — живёт в базе), без токена → 401.
+
+**Осталось.** Прежние позиции записи от 2026-10-20 (apitest): импорт выполнен
+пользователем; public_base_url кабинета по-прежнему не задан.
+
 ## 2026-10-20 — Сайт api-progression (apitest.evil-mesh.ru) на panel_test + поддержка deploy/-layout
 
 **Запрос.** «Добавь сайт с доменом apitest.evil-mesh.ru из репо
