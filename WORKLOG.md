@@ -8,6 +8,40 @@
 
 ---
 
+## 2026-10-22 — panel_test перезагружен (применение политик AppArmor)
+
+**Запрос.** «panel_test можно перезапустить» — закрыть оставшийся после обновления
+ОС `reboot-required`.
+
+**Диагностика.** После `apt-get upgrade` 2026-10-22 на panel_test оставался
+`/var/run/reboot-required` с причиной `apparmor` (ядро не менялось). Перед
+перезагрузкой: `sitepanel`, `nginx`, `docker`, `ssh` — enabled; apt/dpkg не
+работают; сайты `pqr` и `api-progression` — `running`, `autoStart=true`;
+9 docker-контейнеров Up.
+
+**Изменения — panel_test.** `sync; systemctl reboot` — 2026-10-21 21:41:58 UTC
+(2026-10-22 00:41:58 MSK).
+
+**Проверка.**
+- SSH вернулся примерно через 20 с; `uptime` — 0 минут.
+- `systemctl is-active` → `sitepanel`, `nginx`, `docker` — active;
+  `systemctl --failed` пуст; `reboot-required` снят.
+- `healthz` → 200; `pqr` (10001) → 200 через ~25 с после старта, `api-progression`
+  (10000) → 200 через ~30 с; `db.json` — оба сайта `running`,
+  `restartAttempts: 0`, `crashLoop: false`.
+- 9 контейнеров Up (включая `sitepanel-3ac49e2f0d64-pumping-api-1`);
+  `pumping.db` в контейнере — 103 403 520 Б, файл на хосте в `deploy/data` —
+  103 403 520 Б, WAL/SHM на месте.
+- Drop-in `forward-client-ip.conf` и `PANEL_FORWARD_CLIENT_IP=1` сохранились.
+- Снаружи: `pqr.evil-mesh.ru` 200, `apitest.evil-mesh.ru` 200,
+  `panel.evil-mesh.ru` 401 (Basic); `/api/word/biglist` без токена → 401.
+- Ошибок в журнале `sitepanel` после старта нет.
+
+**Осталось.**
+- Контейнеры от прежних docker-тестов (9 штук) снова подняты после ребута —
+  не удалялись.
+- Локальный `main` впереди `origin/main` на 3 коммита (журналы), не запушен.
+
 ## 2026-10-22 — panel_beget: 6a0044b + PANEL_FORWARD_CLIENT_IP=1; обновления ОС на обоих стендах
 
 **Запрос.** «обнови прод, после выполни обновления ос на обоих стендах».
