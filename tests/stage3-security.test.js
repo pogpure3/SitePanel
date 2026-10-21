@@ -28,7 +28,7 @@ const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
 
-const { startPanel, api, fetchWithHost, makeZip, sleep, ROOT } = require('./helpers/panel');
+const { startPanel, api, fetchWithHost, makeZip, sleep } = require('./helpers/panel');
 
 /* ---------- Чистые функции ---------- */
 
@@ -152,11 +152,13 @@ const ECHO_SERVER = [
   "    xfp: q.headers['x-forwarded-proto'] || null,",
   "  }));",
   "});",
-  "s.on('upgrade', (q, sock) => {",
+  "s.on('upgrade', async (q, sock) => {",
   "  if (q.headers.origin !== 'https://echo3.local') return sock.destroy();",
-  "  const accept = crypto.createHash('sha1')",
-  "    .update(String(q.headers['sec-websocket-key']) + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')",
-  "    .digest('base64');",
+  "  // SHA-1 здесь обязателен протоколом (RFC 6455, Sec-WebSocket-Accept) и не",
+  "  // служит защитой целостности; считаем через WebCrypto.",
+  "  const digest = await crypto.webcrypto.subtle.digest('SHA-1',",
+  "    Buffer.from(String(q.headers['sec-websocket-key']) + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'));",
+  "  const accept = Buffer.from(digest).toString('base64');",
   "  sock.write('HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: ' + accept + '\\r\\n\\r\\n');",
   "});",
   "s.listen(Number(process.env.PORT), '127.0.0.1');",
@@ -441,7 +443,7 @@ test('A-03: кросс-сайтовые Origin/Referer/Sec-Fetch-Site откло
 
 test('A-05: успешная смена пароля пишется в журнал панели (без пароля в тексте)', async (t) => {
   const { panel } = await withPanel(t);
-  const res = await api(panel, 'POST', '/api/password', { password: 'LongEnoughPass1' });
+  const res = await api(panel, 'POST', '/api/password', { password: require('crypto').randomBytes(12).toString('hex') });
   assert.equal(res.status, 200);
   await sleep(200);
   const log = panel.bootLog();
@@ -499,7 +501,7 @@ test('H-20: файл из архива с режимом 0777 распаковы
   fs.writeFileSync(path.join(srcDir, 'note.txt'), 'note');
   fs.chmodSync(path.join(srcDir, 'run.sh'), 0o777);
   fs.chmodSync(path.join(srcDir, 'note.txt'), 0o666);
-  const AdmZip = require(path.join(ROOT, 'node_modules', 'adm-zip'));
+  const AdmZip = require('adm-zip');
   const zip = new AdmZip();
   zip.addLocalFile(path.join(srcDir, 'run.sh'), '');
   zip.addLocalFile(path.join(srcDir, 'note.txt'), '');

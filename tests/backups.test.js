@@ -87,7 +87,10 @@ test('ручной бэкап: zip на диске, sidecar-метаданные
   assert.equal(r.data.ok, true);
   assert.match(r.data.backup.name, /^\d{8}-\d{6}\.zip$/);
 
-  const zipPath = path.join(backupsDirOf(panel, site.id), r.data.backup.name);
+  const bdir = path.resolve(backupsDirOf(panel, site.id));
+  const zipPath = path.resolve(bdir, r.data.backup.name);
+  // Имя пришло из API — проверяем, что оно не выводит за каталог бэкапов.
+  if (!zipPath.startsWith(bdir + path.sep)) throw new Error('имя бэкапа вне каталога: ' + r.data.backup.name);
   assert.ok(fs.existsSync(zipPath), 'архив лежит в data/backups/<id>/');
   const meta = JSON.parse(fs.readFileSync(zipPath + '.json', 'utf8'));
   assert.equal(meta.files, 2);

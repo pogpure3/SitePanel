@@ -97,15 +97,21 @@ async function freeBytes(dir) {
  * разрастается в разы. Симлинки не упаковываются: в архиве они небезопасны,
  * а extractZip при восстановлении уже умеет их отбрасывать — проще не класть.
  */
-function addDirToZip(archive, absDir, rel, stats) {
+function addDirToZip(archive, absDir, rel, stats, rootDir = absDir) {
   const maxBytes = config.backupMaxSiteMb * 1048576;
+  const root = path.resolve(rootDir);
   for (const d of fs.readdirSync(absDir, { withFileTypes: true })) {
     if (d.name === 'node_modules') continue;
     const abs = path.join(absDir, d.name);
+    // Явная граница: даже подделанное/неожиданное имя директории не может
+    // увести упаковку за пределы каталога сайта (симлинки уже отсечены ниже,
+    // но проверка не зависит от d.isSymbolicLink()).
+    const resolved = path.resolve(abs);
+    if (resolved !== root && !resolved.startsWith(root + path.sep)) continue;
     const entryPath = rel ? `${rel}/${d.name}` : d.name;
     if (d.isSymbolicLink()) continue;
     if (d.isDirectory()) {
-      addDirToZip(archive, abs, entryPath, stats);
+      addDirToZip(archive, abs, entryPath, stats, rootDir);
       continue;
     }
     if (!d.isFile()) continue;

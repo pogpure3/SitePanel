@@ -180,6 +180,16 @@
 
   <script src="/vendor/xterm.js"></script>
   <script src="/vendor/addon-fit.js"></script>
+  <!-- Вид-страницы (функции, вызываемые каркасом app.js) — грузятся ДО app.js. -->
+  <script src="/views-list.js"></script>
+  <script src="/views-site.js"></script>
+  <script src="/views-files.js"></script>
+  <script src="/views-backups.js"></script>
+  <script src="/views-dashboard.js"></script>
+  <script src="/views-settings.js"></script>
+  <script src="/views-users.js"></script>
+  <script src="/views-terminal.js"></script>
+  <!-- Каркас: api/модалки/роутинг/оболочка + init (рендер запускается здесь). -->
   <script src="/app.js"></script>
 </body>
 </html>

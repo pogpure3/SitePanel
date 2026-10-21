@@ -20,7 +20,6 @@ const { execFileSync } = require('child_process');
 const manager = require('../src/sites/manager');
 
 const isPosix = process.platform !== 'win32';
-const ROOT = path.join(__dirname, '..');
 
 function tmpDir(t, prefix) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -82,7 +81,7 @@ test('extractZip: executable-бит из архива сохраняется', (
   fs.chmodSync(path.join(src, 'index.html'), 0o644);
 
   // adm-zip.addLocalFile берёт режим с диска — так архив и получает 0755.
-  const AdmZip = require(path.join(ROOT, 'node_modules', 'adm-zip'));
+  const AdmZip = require('adm-zip');
   const zip = new AdmZip();
   zip.addLocalFile(path.join(src, 'scripts', 'start.sh'), 'scripts');
   zip.addLocalFile(path.join(src, 'index.html'));

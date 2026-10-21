@@ -9,13 +9,13 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 const { startPanel, api, waitFor, makeZip } = require('./helpers/panel');
 
 let hasDocker = false;
 try {
-  execSync('docker version --format {{.Server.Version}}', { stdio: 'ignore', timeout: 15000 });
+  execFileSync('docker', ['version', '--format', '{{.Server.Version}}'], { stdio: 'ignore', timeout: 15000 });
   hasDocker = true;
 } catch {
   /* docker недоступен — интеграционные тесты скипаются */
@@ -26,8 +26,14 @@ try {
 function makeProjectDir(t, files) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-docker-detect-'));
   t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* noop */ } });
+  const root = path.resolve(dir);
   for (const [name, content] of Object.entries(files)) {
     const full = path.join(dir, name);
+    // Граница каталога фикстуры: имя не должно уводить запись наружу.
+    const resolved = path.resolve(full);
+    if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+      throw new Error(`makeProjectDir: путь вне каталога фикстуры: ${name}`);
+    }
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, content, 'utf8');
   }
@@ -35,6 +41,8 @@ function makeProjectDir(t, files) {
 }
 
 const NODE_PKG = JSON.stringify({ name: 'app', scripts: { start: 'node server.js' } });
+
+
 
 test('detectType: Dockerfile и compose-файлы важнее package.json', (t) => {
   const { detectType, detectDockerFlavor } = require('../src/sites/manager');
@@ -314,12 +322,15 @@ test('интеграция: сайт из Dockerfile деплоится, про�
   const del = await api(panel, 'DELETE', `/api/sites/${site.id}`);
   assert.equal(del.status, 200);
   await waitFor(async () => {
-    const { execSync } = require('child_process');
     let ps = '';
     let images = '';
     try {
-      ps = execSync(`docker ps -a --filter name=sitepanel-${site.id} --format {{.ID}}`, { encoding: 'utf8', timeout: 15000 });
-      images = execSync(`docker images sitepanel-${site.id} --format {{.ID}}`, { encoding: 'utf8', timeout: 15000 });
+      // Команда docker — с ПОСТОЯННЫМИ аргументами, фильтрация в JS: значения из
+      // ответа API не попадают в аргументы процесса (инъекция опций исключена).
+      const allNames = execFileSync('docker', ['ps', '-a', '--format', '{{.Names}}'], { encoding: 'utf8', timeout: 15000 });
+      ps = allNames.split('\n').filter((n) => n.startsWith('sitepanel-' + site.id)).join('\n');
+      const allImages = execFileSync('docker', ['images', '--format', '{{.Repository}}'], { encoding: 'utf8', timeout: 15000 });
+      images = allImages.split('\n').filter((n) => n === 'sitepanel-' + site.id).join('\n');
     } catch { /* docker пропал — не ждём */ }
     return ps.trim() === '' && images.trim() === '' ? true : null;
   }, { timeout: 60000, interval: 1000, label: 'контейнер и образ удалены' });
@@ -426,10 +437,14 @@ test('интеграция: безопасность compose — порты вт
     'server.js': SERVER_JS('sec1'),
   });
   await waitForSiteAnswer(panel, site, 'sec1', 'compose-sec отвечает', 240000);
-  const { execSync } = require('child_process');
-  const portsOut = execSync(
-    'docker ps --filter label=com.docker.compose.project=sitepanel-' + site.id + ' --format "{{.Ports}}"',
+  const { execFileSync } = require('child_process');
+  // Команда — с постоянными аргументами; нужный проект отбираем в JS.
+  const allPorts = execFileSync('docker', ['ps', '--format', '{{.Label "com.docker.compose.project"}}|{{.Ports}}'],
     { encoding: 'utf8', timeout: 15000 });
+  const portsOut = allPorts.split('\n')
+    .filter((l) => l.startsWith('sitepanel-' + site.id + '|'))
+    .map((l) => l.slice(l.indexOf('|') + 1))
+    .join('\n');
   assert.ok(!portsOut.includes('31337'), 'порт стороннего сервиса опубликован: ' + portsOut.trim());
   assert.ok(portsOut.includes('127.0.0.1:' + site.port + '->'), 'публикация панели на месте: ' + portsOut.trim());
 
@@ -458,8 +473,9 @@ test('интеграция: monitor самолечит crashed docker-сайта
   if (!hasDocker) return t.skip('docker CLI недоступен — интеграционный тест скипается');
   const panel = await startPanel({ PANEL_MONITOR_TICK_MS: '700' });
   t.after(async () => { await panel.stop(); });
-  const { execSync } = require('child_process');
-  const docker = (cmd) => execSync(cmd, { encoding: 'utf8', timeout: 60000 });
+  const { execFileSync } = require('child_process');
+  // execFileSync с массивом аргументов: никакой shell-интерпретации строки.
+  const docker = (file, args) => execFileSync(file, args, { encoding: 'utf8', timeout: 60000 });
 
   const site = await uploadZip(panel, os.tmpdir(), 'selfheal', {
     Dockerfile: DOCKERFILE('sh1'),
@@ -477,7 +493,8 @@ test('интеграция: monitor самолечит crashed docker-сайта
 
   // Поднимаем контейнер вручную (эмуляция restart-политики docker) —
   // монитор обязан вернуть running без рестарта панели.
-  docker('docker run -d --name sitepanel-' + site.id + ' --restart unless-stopped -p 127.0.0.1:' + site.port + ':' + site.containerPort + ' sitepanel-' + site.id);
+  docker('docker', ['run', '-d', '--name', 'sitepanel-' + site.id, '--restart', 'unless-stopped',
+    '-p', '127.0.0.1:' + site.port + ':' + site.containerPort, 'sitepanel-' + site.id]);
   const healed = await waitFor(async () => {
     const r = await api(panel, 'GET', '/api/sites/' + site.id);
     return r.data && r.data.status === 'running' ? r.data : null;

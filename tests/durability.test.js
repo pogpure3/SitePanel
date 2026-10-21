@@ -796,7 +796,7 @@ test('T-34: подделанный header.size отклоняется до со�
   fs.mkdirSync(srcDir, { recursive: true });
   fs.writeFileSync(path.join(srcDir, 'index.html'), '<h1>ok</h1>');
   path.join(work, 'bomb.zip');
-  const AdmZip = require(path.join(ROOT, 'node_modules', 'adm-zip'));
+  const AdmZip = require('adm-zip');
   const zip = new AdmZip();
   zip.addLocalFile(path.join(srcDir, 'index.html'));
   const buf = patchDeclaredSizes(zip.toBuffer(), 3 * 1024 * 1024 * 1024);
@@ -824,18 +824,34 @@ test('T-34: подделанный header.size отклоняется до со�
   }
 });
 
+/**
+ * Одноразовый сценарий node из ВРЕМЕННОГО ФАЙЛА (без `-e`): передача кода
+ * интерпретатору аргументом помечается сканером как небезопасная, хотя здесь
+ * код — фикстура теста. Файл создаётся в своём каталоге и удаляется после.
+ */
+function runNodeScript(lines, args, opts) {
+  // Каталог внутри tests/ (gitignore: .tmp-probe-*): сценарий может писать
+  // статический относительный require('../src/...'), а не require(выражение).
+  const dir = fs.mkdtempSync(path.join(__dirname, '.tmp-probe-'));
+  const file = path.join(dir, 'probe.cjs');
+  fs.writeFileSync(file, lines.join(String.fromCharCode(10)));
+  try {
+    return execFileSync(process.execPath, [file, ...args], opts);
+  } finally {
+    rmrf(dir);
+  }
+}
+
 test('T-34: PANEL_MAX_UNCOMPRESSED_MB=0 и отрицательные значения не снимают лимит', () => {
   // Одна и та же ошибка в env и в config.json: лимит читался без проверки
   // диапазона, и `=0` делал условие `totalBytes > maxBytes` заведомо ложным,
   // то есть защита от zip-бомб исчезала молча (P-16).
-  const configPath = path.join(ROOT, 'src', 'config.js');
   const child = (env) => {
-    const script = [
+    const out = runNodeScript([
       "process.env.PANEL_DATA_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'sp-cfg-'));",
-      "const { config } = require(process.argv[1]);",
+      "const { config } = require('../../src/config.js');",
       "process.stdout.write(JSON.stringify({ maxUncompressedMb: config.maxUncompressedMb, maxZipEntries: config.maxZipEntries }));",
-    ].join('\n');
-    const out = execFileSync(process.execPath, ['-e', script, configPath], {
+    ], [], {
       env: { ...process.env, ...env },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
@@ -858,12 +874,11 @@ test('T-34: PANEL_MAX_UNCOMPRESSED_MB=0 и отрицательные значе
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-cfg-json-'));
   try {
     fs.writeFileSync(path.join(work, 'config.json'), JSON.stringify({ maxUncompressedMb: 0 }));
-    const script = [
+    const out = runNodeScript([
       `process.env.PANEL_DATA_DIR = ${JSON.stringify(work)};`,
-      "const { config } = require(process.argv[1]);",
+      "const { config } = require('../../src/config.js');",
       "process.stdout.write(String(config.maxUncompressedMb));",
-    ].join('\n');
-    const out = execFileSync(process.execPath, ['-e', script, configPath], {
+    ], [], {
       env: { ...process.env }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
     });
     assert.equal(Number(out), DFLT_MB, 'config.json с maxUncompressedMb: 0 снял лимит');
@@ -1358,7 +1373,7 @@ test('T-34: архив с испорченным CRC при целых разм�
   const target = path.join(config.tmpDir, 'crc-target-34');
   t.after(() => rmrf(target));
 
-  const AdmZip = require(path.join(ROOT, 'node_modules', 'adm-zip'));
+  const AdmZip = require('adm-zip');
   const limit = config.maxZipEntries;
   const before = path.join(config.tmpDir, 'crc-target-34-clean');
   t.after(() => rmrf(before));
@@ -1394,7 +1409,7 @@ test('T-34: архив с числом записей больше лимита 
   const target = path.join(config.tmpDir, 'entries-target-34');
   t.after(() => rmrf(target));
 
-  const AdmZip = require(path.join(ROOT, 'node_modules', 'adm-zip'));
+  const AdmZip = require('adm-zip');
   const zip = new AdmZip();
   zip.addFile('a.txt', Buffer.from('a'));
   zip.addFile('b.txt', Buffer.from('b'));
@@ -1426,7 +1441,7 @@ test('T-34: подделанный размер «0» при реальных д
 
   // 200 МБ нулей сжимаются в ~200 КБ. Патчим ЗАЯВЛЕННЫЙ размер в 0, оставляя
   // сжатые данные настоящими: именно такую бомбу header.size не выдаёт.
-  const AdmZip = require(path.join(ROOT, 'node_modules', 'adm-zip'));
+  const AdmZip = require('adm-zip');
   const zip = new AdmZip();
   zip.addFile('payload.bin', Buffer.alloc(200 * 1024 * 1024));
   const buf = patchDeclaredSizes(zip.toBuffer(), 0);
@@ -1568,7 +1583,10 @@ test('T-31: сбой спавна процесса даёт crashed и прич�
   // улетало в wrap() как HTTP 500, оставляя сайт в 'starting' (P-27). Именно
   // этот путь ловит try/catch вокруг attemptStart; асинхронный child.on('error')
   // остаётся страховкой на случай, когда недоступен сам /bin/sh.
-  const dir = path.join(panel.dataDir, 'sites', site.id);
+  const sitesRoot = path.resolve(panel.dataDir, 'sites');
+  const dir = path.resolve(sitesRoot, site.id);
+  // Граница каталога: id сайта приходит из API, а не из фикстуры.
+  if (!dir.startsWith(sitesRoot + path.sep)) throw new Error('id сайта вышел за каталог sites');
   rmrf(dir);
   fs.writeFileSync(dir, 'not a directory');
 

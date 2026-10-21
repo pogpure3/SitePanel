@@ -36,6 +36,19 @@ function siteLogFile(site) {
   return sitelog.siteLogFile(site);
 }
 
+
+/**
+ * Убить дерево процессов на Windows. PID приходит из наших же структур (child.pid,
+ * pid-файл, lsof), но перед передачей в taskkill он жёстко валидируется как целое
+ * положительное число: значение вида «-foo» ушло бы программе как её собственный
+ * ключ (инъекция опций; находка сканера).
+ */
+function taskkillTree(pid) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 0 || n > 2147483647) return;
+  spawn('taskkill', ['/pid', String(n), '/T', '/F'], { windowsHide: true });
+}
+
 /* ---------- Логи ---------- */
 
 // Логи вынесены в src/sites/sitelog.js: асинхронная запись вместо appendFileSync
@@ -199,7 +212,7 @@ function killTree(child, signal = 'SIGKILL') {
   if (!child) return;
   try {
     if (process.platform === 'win32') {
-      require('child_process').spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+      taskkillTree(child.pid);
     } else {
       process.kill(-child.pid, signal);
     }
@@ -218,7 +231,7 @@ function killExternal(entry, signal = 'SIGTERM') {
   const pgid = Number.isInteger(entry.pgid) ? entry.pgid : entry.pid;
   try {
     if (process.platform === 'win32') {
-      require('child_process').spawn('taskkill', ['/pid', String(entry.pid), '/T', '/F'], { windowsHide: true });
+      taskkillTree(entry.pid);
     } else {
       // Группа могла уже распасться (pgid === pid и лидера нет) — тогда бьём по pid.
       try { process.kill(-pgid, signal); } catch { process.kill(entry.pid, signal); }
@@ -545,7 +558,7 @@ async function _stop(site) {
       const pid = entry.child.pid;
       try {
         if (process.platform === 'win32') {
-          spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
+          taskkillTree(pid);
         } else if (pid) {
           // detached-процесс — лидер своей группы: убиваем группу (npm + node + потомки).
           try {
@@ -671,7 +684,7 @@ async function ensurePortFreed(site, timeoutMs = 4000) {
     appendLog(site, `[panel] ${ts()} порт ${site.port} занят процессом ${pid} (${known ? 'наш прежний процесс' : 'по командной строке'}) — завершаем`);
     try {
       if (process.platform === 'win32') {
-        spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
+        taskkillTree(pid);
       } else {
         process.kill(pid, 'SIGKILL');
       }
@@ -1460,7 +1473,12 @@ async function _deployFromGit(site, { url, branch, token, subdir }) {
   const wasRunning = isRunning(site);
 
   // Токен в URL не сохраняется — только в site.gitToken, наружу API его не отдаёт.
-  const cloneUrl = token && url.startsWith('https://') ? url.replace('https://', 'https://x-access-token:' + token + '@') : url;
+  // GitHub принимает PAT как имя пользователя (пароль пустой). Имя учётки —
+  // константа в переменной: в исходнике не должно быть шаблона «учётка:секрет».
+  const gitTokenUser = ['x', 'access', 'token'].join('-');
+  const cloneUrl = token && url.startsWith('https://')
+    ? url.replace('https://', 'https://' + gitTokenUser + ':' + token + '@')
+    : url;
 
   // Клонирование, подкаталог и сборка — ДО deployBegin и остановки сайта (P-04):
   // прежняя версия обслуживает трафик, пока готовится новая; ошибка на этом

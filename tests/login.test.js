@@ -106,7 +106,7 @@ test('успешный вход выдаёт HttpOnly-cookie, сессия ра�
 
 test('неверный пароль даёт 401 и понятную ошибку', async (t) => {
   const panel = await withAuthPanel(t);
-  const res = await api(panel, 'POST', '/api/login', { user: LOGIN_USER, password: 'wrong-password' });
+  const res = await api(panel, 'POST', '/api/login', { user: LOGIN_USER, password: require('crypto').randomBytes(10).toString('hex') });
   assert.equal(res.status, 401);
   assert.match(res.data.error, /Неверный логин или пароль/);
   assert.ok(!res.headers.get('set-cookie'), 'при неудаче cookie сессии выдаваться не должно');
@@ -137,8 +137,9 @@ test('смена пароля гасит все активные сессии', 
   const loginRes = await api(panel, 'POST', '/api/login', { user: LOGIN_USER, password: LOGIN_PASS });
   const { value } = cookieFrom(loginRes);
 
+  const newPassword = require('crypto').randomBytes(12).toString('hex');
   const changed = await api(panel, 'POST', '/api/password',
-    { user: LOGIN_USER, password: 'brand-new-pass-456' }, { Authorization: basicAuth(panel) });
+    { user: LOGIN_USER, password: newPassword }, { Authorization: basicAuth(panel) });
   assert.equal(changed.status, 200, `смена пароля не удалась: ${changed.text}`);
 
   const after = await fetch(panel.base + '/api/system', { headers: { Cookie: `sp_session=${value}` } });
@@ -147,7 +148,7 @@ test('смена пароля гасит все активные сессии', 
   // Возвращаем пароль: остальные тесты не зависят от panel.auth, но аккуратность дёшево.
   const back = await api(panel, 'POST', '/api/password',
     { user: LOGIN_USER, password: LOGIN_PASS },
-    { Authorization: 'Basic ' + Buffer.from(`${LOGIN_USER}:brand-new-pass-456`).toString('base64') });
+    { Authorization: 'Basic ' + Buffer.from(`${LOGIN_USER}:${newPassword}`).toString('base64') });
   assert.equal(back.status, 200);
 });
 

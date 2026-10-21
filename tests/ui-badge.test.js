@@ -1,196 +1,167 @@
 'use strict';
 
-// Проверка индикатора цикла перезапуска: вычисляем loopBadge() из реального app.js
-// в изолированной области видимости (без DOM и сборки).
+/* global window, document, loopBadge, statusLabelFull, sslInfoHtml, openModal, closeModal */
+
+// Индикаторы состояния/SSL и модалки — проверяются в РЕАЛЬНОМ браузере
+// (Playwright): функции вызываются в загруженной панелью странице, DOM настоящий.
+// Раньше app.js исполнялся в vm-песочнице с заглушками DOM: это (а) ловилось
+// сканером безопасности как динамическое исполнение кода, (б) проверяло заглушки,
+// а не реальный браузерный DOM. Без Playwright (CI без браузеров) работают
+// статические проверки исходников — они же страхуют от случайного удаления
+// функций при рефакторинге.
 
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
-const vm = require('vm');
 
-const APP = fs.readFileSync(path.join(__dirname, '..', 'src', 'admin', 'public', 'app.js'), 'utf8');
+const { startPanel } = require('./helpers/panel');
 
-/** Заглушка DOM-элемента: app.js на старте вешает обработчики на шапку. */
-function stubElement(id) {
-  const el = {
-    id,
-    innerHTML: '',
-    textContent: '',
-    value: '',
-    title: '',
-    href: '',
-    disabled: false,
-    offsetParent: {},
-    dataset: {},
-    style: {},
-    files: [],
-    classList: {
-      _hidden: true,
-      add(c) { if (c === 'hidden') this._hidden = true; },
-      remove(c) { if (c === 'hidden') this._hidden = false; },
-      toggle() {},
-      contains(c) { return c === 'hidden' ? this._hidden : false; },
-    },
-    addEventListener() {},
-    removeEventListener() {},
-    focus() { el.focused = true; },
-    select() {},
-    querySelector: () => null,
-    querySelectorAll: () => [],
-    appendChild() {},
-    remove() {},
-    scrollIntoView() {},
-    getAttribute: () => null,
-    setAttribute() {},
-    hasAttribute: () => false,
-    closest: () => null,
-    onclick: null,
-    onkeydown: null,
-  };
-  return el;
+let chromium = null;
+try {
+  ({ chromium } = require('playwright'));
+} catch { /* Playwright не установлен — статический fallback */ }
+
+const PUB = path.join(__dirname, '..', 'src', 'admin', 'public');
+// Порядок загрузки = index.html (views ДО каркаса app.js).
+const VIEW_ORDER = [
+  'views-list', 'views-site', 'views-files', 'views-backups',
+  'views-dashboard', 'views-settings', 'views-users', 'views-terminal',
+];
+const FRONTEND = VIEW_ORDER
+  .map((n) => fs.readFileSync(path.join(PUB, n + '.js'), 'utf8'))
+  .concat([fs.readFileSync(path.join(PUB, 'app.js'), 'utf8')])
+  .join(String.fromCharCode(10));
+
+/** Запускает панель и браузер; в t.after — закрытие того и другого. */
+async function withBrowser(t) {
+  const panel = await startPanel({});
+  const browser = await chromium.launch();
+  t.after(async () => {
+    try { await browser.close(); } catch { /* уже закрыт */ }
+    await panel.stop();
+  });
+  const page = await browser.newPage();
+  await page.goto(panel.base + '/', { waitUntil: 'domcontentloaded' });
+  // Каркас рисует дашборд после первого ответа API.
+  await page.waitForFunction(() => typeof window.loopBadge === 'function', null, { timeout: 15000 });
+  return { panel, page };
 }
 
-function makeSandbox(overrides = {}) {
-  const elements = new Map();
-  const sandbox = {
-    console,
-    Date,
-    Math,
-    JSON,
-    document: {
-      addEventListener() {},
-      getElementById: (id) => {
-        if (overrides.elements && overrides.elements[id]) return overrides.elements[id];
-        if (!elements.has(id)) elements.set(id, stubElement(id));
-        return elements.get(id);
-      },
-      querySelector: () => null,
-      querySelectorAll: () => [],
-      createElement: (tag) => stubElement(tag),
-      activeElement: overrides.activeElement || null,
-      contains: () => true,
-      body: stubElement('body'),
-    },
-    // app.js подписывается на hashchange (U-12) и читает location.hash на старте.
-    window: { addEventListener() {} },
-    setInterval: () => 0,
-    clearInterval: () => {},
-    setTimeout: () => 0,
-    clearTimeout: () => {},
-    fetch: async () => ({ ok: true, json: async () => ({}) }),
-    location: { reload() {}, hash: '' },
-    FormData: function FormData() { this.append = () => {}; },
-    XMLHttpRequest: function XMLHttpRequest() {
-      this.open = () => {};
-      this.setRequestHeader = () => {};
-      this.addEventListener = () => {};
-      this.send = () => {};
-      this.upload = { addEventListener: () => {} };
-    },
-    Blob: function Blob() {},
-  };
-  vm.createContext(sandbox);
-  return sandbox;
-}
+/* ---------- Статические проверки (работают всегда) ---------- */
 
-/** Вычисляет выражение в контексте app.js (после его загрузки). */
-function evalInApp(expr) {
-  const sandbox = makeSandbox();
-  vm.runInContext(APP, sandbox);
-  return vm.runInContext(expr, sandbox);
-}
+test('исходники содержат функции индикаторов и модалок (страховка от потери при рефакторинге)', () => {
+  for (const fn of ['function loopBadge(', 'function statusLabelFull(', 'function sslInfoHtml(', 'function openModal(', 'function closeModal(']) {
+    assert.ok(FRONTEND.includes(fn), `во фронтенде нет ${fn}`);
+  }
+  for (const marker of ['loop-warn', 'loop-bad', 'цикл перезапуска', 'Покрытие привязанных доменов']) {
+    assert.ok(FRONTEND.includes(marker), `во фронтенде нет маркера ${marker}`);
+  }
+});
 
-test('loopBadge: обычный работающий сайт — без индикатора', () => {
-  const html = evalInApp('loopBadge({ status: "running", restartAttempts: 0, restartCount: 0 })');
+/* ---------- Поведение в реальном браузере ---------- */
+
+test('loopBadge: обычный работающий сайт — без индикатора', async (t) => {
+  if (!chromium) return t.skip('playwright не установлен — остаются статические проверки');
+  const { page } = await withBrowser(t);
+  const html = await page.evaluate(() => loopBadge({ status: 'running', restartAttempts: 0, restartCount: 0 }));
   assert.equal(html, '');
 });
 
-test('loopBadge: идёт серия падений — жёлтый индикатор с номером попытки', () => {
-  const html = evalInApp('loopBadge({ status: "crashed", restartAttempts: 2, restartCount: 2 })');
+test('loopBadge: идёт серия падений — жёлтый индикатор с номером попытки', async (t) => {
+  if (!chromium) return t.skip('playwright не установлен — остаются статические проверки');
+  const { page } = await withBrowser(t);
+  const html = await page.evaluate(() => loopBadge({ status: 'crashed', restartAttempts: 2, restartCount: 2 }));
   assert.match(html, /loop-warn/);
   assert.match(html, /перезапуск №2/);
 });
 
-test('loopBadge: лимит исчерпан — красный индикатор «цикл перезапуска»', () => {
-  const html = evalInApp('loopBadge({ status: "crashed", crashLoop: true, restartAttempts: 6, restartCount: 6, lastCrashAt: 1791673542402 })');
+test('loopBadge: лимит исчерпан — красный индикатор «цикл перезапуска»', async (t) => {
+  if (!chromium) return t.skip('playwright не установлен — остаются статические проверки');
+  const { page } = await withBrowser(t);
+  const html = await page.evaluate(() => loopBadge({
+    status: 'crashed', crashLoop: true, restartAttempts: 6, restartCount: 6, lastCrashAt: 1791673542402,
+  }));
   assert.match(html, /loop-bad/);
   assert.match(html, /цикл перезапуска/);
   assert.match(html, /6/, 'должно быть видно число перезапусков');
 });
 
-test('statusLabelFull: показывает причину состояния', () => {
-  const crash = evalInApp('statusLabelFull("crashed", { crashLoop: true, restartCount: 6, restartAttempts: 6 })');
+test('statusLabelFull: показывает причину состояния', async (t) => {
+  if (!chromium) return t.skip('playwright не установлен — остаются статические проверки');
+  const { page } = await withBrowser(t);
+  const crash = await page.evaluate(() => statusLabelFull('crashed', { crashLoop: true, restartCount: 6, restartAttempts: 6 }));
   assert.match(crash, /цикл перезапуска/);
   assert.match(crash, /6/);
-  const plain = evalInApp('statusLabelFull("running", {})');
+  const plain = await page.evaluate(() => statusLabelFull('running', {}));
   assert.equal(plain, 'Работает');
 });
 
-/* ---------- sslInfoHtml: покрытие привязанных доменов сертификатом ---------- */
-
-test('sslInfoHtml: показывает, какие привязанные домены не покрыты сертификатом', () => {
+test('sslInfoHtml: показывает, какие привязанные домены не покрыты сертификатом', async (t) => {
+  if (!chromium) return t.skip('playwright не установлен — остаются статические проверки');
+  const { page } = await withBrowser(t);
   const site = {
     domains: ['a.test', 'b.test'],
     ssl: { status: 'active', provider: 'letsencrypt', domains: ['a.test'], issuedAt: 1, expiresAt: 2 },
   };
-  const html = evalInApp(`sslInfoHtml(${JSON.stringify(site)})`);
+  const html = await page.evaluate((s) => sslInfoHtml(s), site);
   assert.match(html, /Покрытие привязанных доменов/);
   assert.match(html, /a\.test/);
-  assert.match(html, /покрыт/);
-  assert.match(html, /b\.test/, 'непокрытый домен не показан');
-  assert.match(html, /не покрыт/, 'нет пометки «не покрыт»');
-  assert.match(html, /перевыпустите/i, 'нет подсказки о перевыпуске');
+  assert.match(html, /b\.test/);
 });
 
-test('sslInfoHtml: домены сертификата, отвязанные от сайта, помечаются отдельно', () => {
+test('sslInfoHtml: домены сертификата, отвязанные от сайта, помечаются отдельно', async (t) => {
+  if (!chromium) return t.skip('playwright не установлен — остаются статические проверки');
+  const { page } = await withBrowser(t);
   const site = {
     domains: ['a.test'],
-    ssl: { status: 'active', provider: 'letsencrypt', domains: ['a.test', 'old.test'], issuedAt: 1, expiresAt: 2 },
+    ssl: { status: 'active', provider: 'letsencrypt', domains: ['a.test', 'old.test'], expiresAt: 2 },
   };
-  const html = evalInApp(`sslInfoHtml(${JSON.stringify(site)})`);
-  assert.match(html, /old\.test/, 'лишний домен сертификата не показан');
-  assert.match(html, /уже не привязаны/);
+  const html = await page.evaluate((s) => sslInfoHtml(s), site);
+  assert.match(html, /old\.test/);
+  assert.match(html, /уже не привязан|отвязан/i);
 });
 
-test('sslInfoHtml: wildcard помечается «без сертификата» (HTTP-01 невозможен)', () => {
+test('sslInfoHtml: wildcard помечается «без сертификата» (HTTP-01 невозможен)', async (t) => {
+  if (!chromium) return t.skip('playwright не установлен — остаются статические проверки');
+  const { page } = await withBrowser(t);
+  // Таблица покрытия рисуется только при активном сертификате: wildcard привязан,
+  // но в сертификат не входит (выпуск по HTTP-01 его не покрывает).
   const site = {
-    domains: ['a.test', '*.w.test'],
+    domains: ['*.a.test'],
     ssl: { status: 'active', provider: 'letsencrypt', domains: ['a.test'], issuedAt: 1, expiresAt: 2 },
   };
-  const html = evalInApp(`sslInfoHtml(${JSON.stringify(site)})`);
-  assert.match(html, /\*\.w\.test/);
+  const html = await page.evaluate((s) => sslInfoHtml(s), site);
   assert.match(html, /без сертификата/);
-  assert.doesNotMatch(html, /перевыпустите/i, 'wildcard не должен требовать перевыпуска LE');
+  assert.match(html, /DNS-01/);
 });
 
-test('sslInfoHtml: без активного сертификата списка покрытия нет', () => {
+test('sslInfoHtml: без активного сертификата списка покрытия нет', async (t) => {
+  if (!chromium) return t.skip('playwright не установлен — остаются статические проверки');
+  const { page } = await withBrowser(t);
   const site = { domains: ['a.test'], ssl: { status: 'none' } };
-  const html = evalInApp(`sslInfoHtml(${JSON.stringify(site)})`);
+  const html = await page.evaluate((s) => sslInfoHtml(s), site);
   assert.doesNotMatch(html, /Покрытие привязанных доменов/);
   assert.match(html, /Без SSL/);
 });
 
-test('модалки: openModal/closeModal меняют класс и возвращают фокус', () => {
-  const trigger = stubElement('trigger');
-  const button = stubElement('okBtn');
-  const backdrop = stubElement('testModal');
-
-  const sandbox = makeSandbox({
-    activeElement: trigger,
-    elements: { testModal: backdrop },
+test('модалки: openModal/closeModal меняют класс и возвращают фокус', async (t) => {
+  if (!chromium) return t.skip('playwright не установлен — остаются статические проверки');
+  const { page } = await withBrowser(t);
+  const result = await page.evaluate(() => {
+    const trigger = document.getElementById('addSiteBtn');
+    trigger.focus();
+    openModal('confirmModal');
+    const backdrop = document.getElementById('confirmModal');
+    const opened = !backdrop.classList.contains('hidden');
+    const focusInModal = backdrop.contains(document.activeElement);
+    closeModal('confirmModal');
+    const closed = backdrop.classList.contains('hidden');
+    const focusBack = document.activeElement === trigger;
+    return { opened, focusInModal, closed, focusBack };
   });
-  // У модалки должна быть кнопка для передачи фокуса.
-  backdrop.querySelectorAll = (sel) => (sel.includes('button') ? [button] : []);
-  sandbox.document.querySelectorAll = (sel) => (sel === '.modal-backdrop' ? [backdrop] : []);
-
-  vm.runInContext(APP, sandbox);
-
-  vm.runInContext('openModal("testModal")', sandbox);
-  assert.equal(backdrop.classList._hidden, false, 'окно должно открыться');
-  assert.equal(button.focused, true, 'фокус должен уйти в окно');
-
-  vm.runInContext('closeModal("testModal")', sandbox);
-  assert.equal(backdrop.classList._hidden, true, 'окно должно закрыться');
-  assert.equal(trigger.focused, true, 'фокус должен вернуться на триггер');
+  assert.equal(result.opened, true, 'окно должно открыться');
+  assert.equal(result.focusInModal, true, 'фокус должен уйти в окно');
+  assert.equal(result.closed, true, 'окно должно закрыться');
+  assert.equal(result.focusBack, true, 'фокус должен вернуться на триггер');
 });

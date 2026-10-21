@@ -327,11 +327,19 @@ function fetchWithHost(port, host, p = '/') {
  * @param {string} zipPath
  */
 function makeZip(dir, files, zipPath) {
-  const AdmZip = require(path.join(ROOT, 'node_modules', 'adm-zip'));
+  // Статический require: динамический require от ROOT помечается сканером
+  // безопасности; из tests/ пакет и так резолвится через ../node_modules.
+  const AdmZip = require('adm-zip');
   fs.mkdirSync(dir, { recursive: true });
   const zip = new AdmZip();
+  const root = path.resolve(dir);
   for (const [name, content] of Object.entries(files)) {
     const full = path.join(dir, name);
+    // Граница каталога: имя файла из фикстуры не должно уводить запись наружу.
+    const resolved = path.resolve(full);
+    if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+      throw new Error(`makeZip: путь вне каталога фикстуры: ${name}`);
+    }
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, content, 'utf8');
     zip.addLocalFile(full, path.dirname(name) === '.' ? '' : path.dirname(name));
