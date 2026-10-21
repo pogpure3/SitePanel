@@ -412,6 +412,19 @@
 
 ### Инфраструктура стенда
 
+**panel_beget: 6a0044b + PANEL_FORWARD_CLIENT_IP=1; ОС обновлена на обоих
+стендах** (2026-10-22) — на прод выложен HEAD `422669f` (код `6a0044b`,
+передача реального IP клиента от доверенного прокси) и создан drop-in
+`/etc/systemd/system/sitepanel.service.d/forward-client-ip.conf` с
+`PANEL_FORWARD_CLIENT_IP=1`; бэкапы кода/данных/юнита в
+`/root/*-20261022-003005.*`. После рестарта `healthz` 200, `pg` 200, `m` 401,
+`db.json` не изменился, все 41 файл `src/` = `422669f`. Затем `apt-get upgrade`
+с сохранением локальных конфигов: panel_beget — 20 пакетов (остаток 0,
+`reboot-required` нет; `needrestart` перезапустил панель, сайты поднялись
+автоматически), panel_test — 56 пакетов, включая Docker CE 29.9.2 (9
+контейнеров перезапущены, `pqr`/`apitest` 200, остаток 0). На panel_test
+остаётся `reboot-required` из-за `apparmor` — перезагрузка не выполнялась.
+
 **panel_test: панель обновлена до 584cb00 (fe12f6d)** (2026-10-21) — тестовый
 стенд догнан до HEAD: `src/sites/backups.js` и `manager.js` обновлены с 42a4dbe
 (граница корня при упаковке ZIP, валидация PID перед `taskkill`, сборка

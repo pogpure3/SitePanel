@@ -8,6 +8,76 @@
 
 ---
 
+## 2026-10-22 — panel_beget: 6a0044b + PANEL_FORWARD_CLIENT_IP=1; обновления ОС на обоих стендах
+
+**Запрос.** «обнови прод, после выполни обновления ос на обоих стендах».
+
+**Диагностика.** `panel_beget` был на коде `fe12f6d`: `src/config.js` md5
+`5a56a260…`, `src/httpserver.js` `b91e8072…`; drop-in с флагом отсутствовал.
+Актуальный HEAD — `422669f` (код `6a0044b` «Pass real client IP…»), в нём
+`config.js` `e7d41fa2…` и `httpserver.js` `deae0560…`. Nginx на beget передаёт
+`X-Real-IP` и `X-Forwarded-For` для `pg` (`/etc/nginx/sites-available/pg:25-26`),
+`m` (`…/m:22-23`) и `beget-admin` (`…/beget-admin:34-35`), поэтому флаг
+`PANEL_FORWARD_CLIENT_IP=1` применим и на проде. До обновления ОС: beget —
+18 пакетов (после `apt-get update` — 20), test — 53 (после update — 56).
+
+**Изменения — panel_beget.**
+- Пакет: `git archive HEAD` (`422669f`) → sha256
+  `e86c7b0617195509ff4bc7ed665054249370b8a06106768bc0803631b62e5dbc` →
+  `/root/sitepanel-beget-20261022-003005.tar.gz` (sha256 совпал).
+- Бэкапы: `/root/sitepanel-code-backup-20261022-003005.tar.gz` (596K),
+  `/root/sitepanel-data-backup-20261022-003005.tar.gz` (14M),
+  `/root/db.json.bak.20261022-003005` (md5 `6e2a6632228f90f0011d65fc2292e2d5`),
+  `/root/auth.json.bak.20261022-003005`,
+  `/root/sitepanel.service.bak.20261022-003005`.
+- Распаковка в `/opt` поверх (`data/`, `node_modules/` не затронуты);
+  `npm install --omit=dev` — `up to date`; `node --check` всех `src/**/*.js` —
+  0 ошибок; md5 двух изменённых файлов совпали с `6a0044b`.
+- Создан drop-in `/etc/systemd/system/sitepanel.service.d/forward-client-ip.conf`:
+  `[Service]` + `Environment=PANEL_FORWARD_CLIENT_IP=1`; `daemon-reload`,
+  `systemctl restart sitepanel` — 2026-10-22 00:30:34 MSK.
+
+**Изменения — обновления ОС.**
+- **panel_beget**: `apt-get update`; `apt-get upgrade -y` с
+  `--force-confdef/--force-confold` — установлено 20 пакетов, в том числе
+  `open-iscsi 2.1.11-3ubuntu3.1`, `liblzma5 5.8.3-1ubuntu0.1`,
+  `ca-certificates 20260816ubuntu0.26.04.1`, `xz-utils`, `rust-coreutils 0.10.0`,
+  `netplan 1.2-1ubuntu5.1`. `needrestart` перезапустил
+  `fail2ban`, `packagekit`, `sitepanel` (00:31:44 MSK), `udisks2`; сайты после
+  перезапуска панели поднялись автоматически. Остаток обновлений — 0,
+  `reboot-required` нет.
+- **panel_test**: `apt-get update` (скорость ~53 кБ/с); `apt-get upgrade -y` с
+  теми же опциями — 56 пакетов, в том числе `docker-ce 29.9.2`,
+  `containerd.io 2.4.2-3`, `docker-compose-plugin 5.6.1`, `liblzma5`,
+  `ca-certificates`, `apparmor 4.0.1really4.0.1-0ubuntu0.24.04.9`, `krb5`,
+  `iproute2`, `snapd 2.77.1`. SSH-сессия оборвалась во время обновления
+  (перезапуск sshd/needrestart); после переподключения apt уже завершился
+  в 21:39:18 UTC, `dpkg --audit` чист. Docker-демон обновился, 9 контейнеров
+  перезапущены. Остаток обновлений — 0.
+
+**Проверка.**
+- panel_beget: `systemctl is-active` → active, в окружении
+  `PANEL_FORWARD_CLIENT_IP=1`; `healthz` → 200; `127.0.0.1:10000` → 200,
+  `127.0.0.1:10001` → 401; снаружи `pg` 200, `m` 401, `beget` 401;
+  `db.json` md5 не изменился (`6e2a6632…`), статусы `running`,
+  `restartAttempts: 0`; все 41 файл `src/` совпадают с `422669f`;
+  `systemctl --failed` пуст; ошибок в журнале нет; `reboot-required` нет.
+- panel_test: active, флаг в окружении, `healthz` 200, `pqr` 200, `api` 200;
+  контейнер `sitepanel-3ac49e2f0d64-pumping-api-1` Up, `docker 29.9.2`;
+  `db.json` — оба сайта `running`, `restartAttempts: 0`;
+  `systemctl --failed` пуст; снаружи `pqr` и `apitest` 200;
+  `reboot-required` — **только `apparmor`**, ядро не менялось (6.8.0-147).
+
+**Осталось.**
+- panel_test: требуется перезагрузка для применения политик AppArmor —
+  не выполнялась, чтобы не прерывать сайты без окна; рекомендуется `reboot`
+  в удобное время (сайты поднимутся автоматически).
+- Локальный HEAD `422669f` (журнал) на 1 коммит впереди `origin/main`
+  (`6a0044b`), не запушен.
+- На panel_test после обновления Docker снова подняты 9 контейнеров, включая
+  мусорные от прежних тестов; не удалялись.
+- Этап 5 плана (изоляция прав от root, A-04) остаётся открытым.
+
 ## 2026-10-22 — panel_test: SitePanel 6a0044b + PANEL_FORWARD_CLIENT_IP=1; api-progression 14130c5
 
 **Запрос.** «На VPS обновить SitePanel до 6a0044b и добавить в его окружение
