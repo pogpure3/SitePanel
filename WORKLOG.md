@@ -8,6 +8,65 @@
 
 ---
 
+## 2026-10-21 — Выкладка обновлённой панели на panel_beget (fe12f6d)
+
+**Запрос.** «panel_beget Обновление версии. Разверни обновленную версию на сервере» —
+перенести на прод-стенд накопленные изменения: Docker-сайты, плановые бэкапы,
+ревью-фиксы безопасности и распил фронтенда.
+
+**Диагностика.** На `panel_beget` (141.133.197.43, хост `yyxrrbytkl`) работал код
+от 2026-10-14: в `src/` не было `src/sites/docker.js`, `package.json` — без
+`archiver` и `js-yaml`; фронтенд — монолитный `app.js` (2063 строки). Схема
+`/opt/sitepanel/data/db.json` уже `version: 1`, поля сайтов совместимы с новым
+`store.js` (миграций не требуется). Живые сайты: `pg` (id `88b1b76605e9`, порт
+10000, `running`) и `mesh-monitor` (id `3ebc4e88346e`, порт 10001, `running`);
+админка — `127.0.0.1:3100`, nginx `nginx -t` ok. Найден незадействованный
+остаток прошлой попытки: `/opt/sitepanel/src-tmp-deploy/` (3 файла
+`config.js`/`index.js`/`store.js` от 2026-10-19), кодом не используется.
+Локально `npm test`: 229 тестов — 204 pass, 4 fail (T-32/T-43/T-44 — известные
+Windows-сбои; `ui-badge` — флейк ECONNREFUSED, повторный прогон 10/10 pass),
+21 skip.
+
+**Изменения — panel_beget.**
+- Пакет: `git archive HEAD` (fe12f6d) → `/tmp/sitepanel-20261021-142620.tar.gz`
+  (611 133 байт, 98 записей, sha256 `31f4e9b5a2c2d0eede57939965efa840625ae5968933e73ce033eff0da7cb312`),
+  залит как `/root/sitepanel-20261021-142620.tar.gz` (sha256 совпал).
+- Бэкапы: `/root/sitepanel-code-backup-20261021-142620.tar.gz` (535K — src,
+  tests, package*.json, docs), `/root/sitepanel-data-backup-20261021-142620.tar.gz`
+  (14M — весь `data/`), `/root/db.json.bak.20261021-142620`
+  (md5 `13a44f8c5d0402531a71a8049bb55ab1`), `/root/auth.json.bak.20261021-142620`.
+- Распаковка архива в `/opt` — перезаписаны `src/`, `tests/`, `package.json`,
+  `package-lock.json`, docs; `data/` и `node_modules/` не затронуты.
+- `npm install --omit=dev`: добавлено 44 пакета, в том числе `archiver 8.0.0`,
+  `js-yaml 4.3.2`.
+- `node --check` для всех `src/**/*.js` — 0 ошибок. MD5 всех файлов `src/`
+  совпадают с коммитом fe12f6d.
+- `systemctl restart sitepanel` — 2026-10-21 14:27:20 MSK.
+
+**Проверка.**
+- `systemctl is-active sitepanel` → `active`; в журнале с момента рестарта ошибок
+  нет (только `DEP0060 util._extend` — предупреждение http-proxy).
+- `127.0.0.1:3100/healthz` → 200; `127.0.0.1:3100/` → 401 (Basic, штатно).
+- Сайты: `127.0.0.1:10000` → 200, `127.0.0.1:10001` → 401 (Basic MeshCentral);
+  через прокси 8080: `Host: pg.evil-mesh.ru` → 301 (редирект на HTTPS),
+  `Host: m.evil-mesh.ru` → 401.
+- Снаружи: `https://pg.evil-mesh.ru/` → 200, `https://m.evil-mesh.ru/` → 401,
+  `https://beget.evil-mesh.ru/` → 401 (Basic админки).
+- `db.json` после старта перезаписан (md5 `6e2a6632228f90f0011d65fc2292e2d5`):
+  diff с бэкапом — только добавленные `containerPort: null` и
+  `dockerFlavor: null` у обоих сайтов; статусы `running`, `restartAttempts: 0`,
+  `crashLoop: false`, данные не потеряны.
+
+**Осталось.**
+- На `panel_beget` Docker не установлен (по указанию не ставить) — Docker-сайты
+  на проде недоступны, остальной функционал работает; включать их там нельзя.
+- `/opt/sitepanel/src-tmp-deploy/` — мусор прошлой выкладки, не удалён; можно
+  убрать при следующем обслуживании.
+- Плановые бэкапы у обоих сайтов выключены (`backupSchedule.enabled: false`) —
+  состояние не менялось.
+- Этап 5 плана (изоляция прав от root, A-04) и вопрос pre-commit-гейта Mimosa
+  остаются открытыми.
+
 ## 2026-10-21 — Распил фронтенда app.js на вид-модули
 
 **Запрос.** «Давай доделаем последнюю крупную задачу» — из ревью оставался
