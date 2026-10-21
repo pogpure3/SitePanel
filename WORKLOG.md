@@ -8,6 +8,71 @@
 
 ---
 
+## 2026-10-22 — panel_test: SitePanel 6a0044b + PANEL_FORWARD_CLIENT_IP=1; api-progression 14130c5
+
+**Запрос.** «На VPS обновить SitePanel до 6a0044b и добавить в его окружение
+PANEL_FORWARD_CLIENT_IP=1, затем перезапустить панель. Обновить
+api-progression до 14130c5 (уже в GitHub) и перезапустить сайт.»
+
+**Диагностика.** panel_test был на коде `fe12f6d` (md5 `src/config.js`
+`5a56a260…`, `src/httpserver.js` `b91e8072…` — совпали с коммитом). Коммит
+`6a0044b` «Pass real client IP to sites behind a trusted proxy» добавляет
+опциональный флаг: при соединении от доверенного форвардера (loopback или
+`PANEL_TRUST_PROXY`) панель берёт последний хоп `X-Forwarded-For` и отдаёт
+его приложению как `X-Forwarded-For`/`X-Real-IP`; по умолчанию поведение
+прежнее (H-14). В systemd-юните флага не было. Nginx-вхост apitest уже
+передаёт `X-Real-IP $remote_addr` и `X-Forwarded-For $proxy_add_x_forwarded_for`
+(`/etc/nginx/sites-available/apitest:27-28`).
+
+api-progression был на `56d2c7f`; `14130c5` «Diagnose and fix IP whitelist
+behind a reverse proxy» нормализует адреса, доверяет XFF/X-Real-IP от
+loopback-пира, добавляет `/api/pumping/whoami` и «Добавить мой IP» в кабинете.
+
+**Изменения — panel_test.**
+- Бэкапы ДО: `/root/sitepanel-code-backup-20261021-212020.tar.gz` (564K),
+  `/root/sitepanel.service.bak.20261021-212020`,
+  `/root/db.json.bak.20261021-212020`,
+  `/root/apiprog-site-backup-20261021-212020.tar.gz` (51M).
+- Код: заменены `/opt/sitepanel/src/config.js`, `src/httpserver.js`,
+  `tests/stage3-security.test.js`, `README.md` из коммита `6a0044b`
+  (md5 совпали до копирования и после: `e7d41fa2…`, `deae0560…`,
+  `3741f1f4…`, `60415daf…`); `node --check` — ok. Зависимости не менялись.
+- Окружение: создан drop-in
+  `/etc/systemd/system/sitepanel.service.d/forward-client-ip.conf`
+  (`[Service] Environment=PANEL_FORWARD_CLIENT_IP=1`), `systemctl
+  daemon-reload`, `systemctl restart sitepanel` — 21:21:03 UTC / 00:21 МСК.
+- api-progression: штатный `manager.deployFromGit` одноразовым скриптом при
+  остановленной панели (пароля админки нет, см. записи от 2026-10-21),
+  скрипт `/root/apiprog-update.js` удалён. Панель стояла 19 с
+  (21:23:18–21:23:37 UTC).
+
+**Проверка.**
+- Панель: `systemctl is-active` — active; в `/proc/<pid>/environ` и
+  `systemctl show -p Environment` — `PANEL_FORWARD_CLIENT_IP=1`.
+- `node --test tests/stage3-security.test.js` на стенде: **16/16 pass**, в
+  том числе новый тест «PANEL_FORWARD_CLIENT_IP=1: адрес клиента от
+  доверенного прокси доходит до приложения» (105 с).
+- api-progression: md5 `server.js` `8d15d587…`, `public/app.js`
+  `5e9ed4bc…`, `style.css` `7ec0379a…`, `index.html` `c1ceb5dd…` — совпали
+  с `14130c5`; контейнер `sitepanel-3ac49e2f0d64-pumping-api-1` пересоздан
+  (21:23:36 UTC), Up, `127.0.0.1:10000->7011/tcp`; `deploy/data`
+  сохранён (`pumping.db` 103 403 520 Б).
+- Сквозная проверка IP: запрос снаружи `https://apitest.evil-mesh.ru/
+  api/word/biglist` без токена → 401, в `usage_log` приложения записан
+  реальный адрес клиента `92.101.230.201` (раньше был бы `127.0.0.1`);
+  запрос через панель с `X-Forwarded-For: 198.51.100.9, 203.0.113.7` и
+  `X-Forwarded-Proto: https` → в лог попал **последний** хоп `203.0.113.7`
+  (клиентский первый хоп отброшен). `whoami` в кабинете требует сессию —
+  проверялся через лог.
+- Снаружи: apitest и pqr → 200; `/api/word/biglist` без токена → 401.
+
+**Осталось.**
+- `public_base_url` кабинета по-прежнему не задан (прежняя позиция).
+- panel_beget не трогали: задача и api-progression относятся к panel_test;
+  если флаг нужен и на продакт-стенде — повторить выкладку `6a0044b` +
+  drop-in там.
+- В `/root` накопились бэкапы выкладок за 2026-10-20…22.
+
 ## 2026-10-21 — Обновление api-progression до 56d2c7f
 
 **Запрос.** «обнови версию» (четвёртая выкладка за сутки).
