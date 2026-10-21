@@ -25,3 +25,7 @@ id_ed25519
 
 # Временные сценарии тестов (durability: runNodeScript)
 tests/.tmp-probe-*
+
+# Локальный стейт инструментов (не версионируется)
+.mimosa/
+.zcode/
