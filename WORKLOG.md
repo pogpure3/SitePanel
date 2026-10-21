@@ -8,6 +8,54 @@
 
 ---
 
+## 2026-10-21 — panel_test догнан до fe12f6d (HEAD 584cb00)
+
+**Запрос.** «обнови тест до актуала» — после проверки версий выяснилось, что
+panel_test отстаёт от HEAD на два файла.
+
+**Диагностика.** panel_test (46.29.164.250, хост `r1114848`) был на 1.0.2:
+фронтенд уже распилен, `archiver`/`js-yaml` стоят, но `src/sites/backups.js` и
+`src/sites/manager.js` соответствовали коммиту 42a4dbe — без проверки границы
+корня сайта при упаковке ZIP, без валидации PID перед `taskkill` и со старой
+сборкой clone-URL. Сайты: `pqr` (id `238b5bbfec01`, порт 10001, node) и
+`api-progression` (id `3ac49e2f0d64`, 10000→7011, docker/compose, контейнер
+`sitepanel-3ac49e2f0d64-pumping-api-1`, Up 12 часов). `db.json` — version 1,
+md5 `8e80cda80589e35f7d0a6324c317b42a`; `data/` 329M; свободно 9.6G.
+В `/opt/sitepanel` не было `LICENSE` (в старом бэкапном наборе отсутствовал).
+На стенде остаются контейнеры от прежних docker-тестов
+(`sitepanel-<hash>`, часть Up 24 часа) — не трогались.
+
+**Изменения — panel_test.**
+- Пакет: `git archive HEAD` (584cb00, код fe12f6d) → sha256
+  `b5fc6e44b6f6e1bca5feac06392ced929a920b142e688afef1b9052ac45694f4`,
+  залит как `/root/sitepanel-test-20261021-232157.tar.gz` (sha256 совпал, 98 записей).
+- Бэкапы: `/root/sitepanel-code-backup-20261021-232157.tar.gz` (564K),
+  `/root/sitepanel-data-backup-20261021-232157.tar.gz` (101M),
+  `/root/db.json.bak.20261021-232157` (md5 `8e80cda80589e35f7d0a6324c317b42a`),
+  `/root/auth.json.bak.20261021-232157`.
+- Распаковка в `/opt` поверх (`data/` и `node_modules/` не затронуты).
+- `npm install --omit=dev` → `up to date in 5s`; `archiver 8.0.0`,
+  `js-yaml 4.3.2`; `node --check` всех `src/**/*.js` — 0 ошибок.
+- `systemctl restart sitepanel` — 2026-10-21 20:23:30 UTC (23:23 MSK).
+
+**Проверка.**
+- `systemctl is-active sitepanel` → `active`; `healthz` → 200; ошибок в журнале
+  за 2 минуты после рестарта нет.
+- Сайты: `127.0.0.1:10001` → 200 (`pqr`), `127.0.0.1:10000` → 200
+  (`api-progression`); контейнер `sitepanel-3ac49e2f0d64-pumping-api-1` остался
+  `Up 12 hours` (рестарт панели его не пересоздавал).
+- `db.json` после рестарта не изменился — md5 прежний
+  `8e80cda80589e35f7d0a6324c317b42a`, статусы `running`, `restartAttempts: 0`.
+- Все 41 файл `src/` совпадают с HEAD по MD5.
+- Снаружи: `https://pqr.evil-mesh.ru/` → 200, `https://apitest.evil-mesh.ru/` →
+  200, `https://panel.evil-mesh.ru/` → 401 (Basic админки).
+
+**Осталось.**
+- На стенде накопились контейнеры от docker-тестов (`sitepanel-<hash>`, Up 24 ч) —
+  не удалялись, стоит разобрать при обслуживании.
+- Этап 5 плана (изоляция прав от root, A-04) остаётся открытым.
+- Оба стенда теперь на одном коде (fe12f6d); beget без Docker, test с Docker.
+
 ## 2026-10-21 — Выкладка обновлённой панели на panel_beget (fe12f6d)
 
 **Запрос.** «panel_beget Обновление версии. Разверни обновленную версию на сервере» —
