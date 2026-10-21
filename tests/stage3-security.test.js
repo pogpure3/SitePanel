@@ -148,6 +148,7 @@ const ECHO_SERVER = [
   "  r.end(JSON.stringify({",
   "    auth: q.headers.authorization || null,",
   "    xff: q.headers['x-forwarded-for'] || null,",
+  "    xri: q.headers['x-real-ip'] || null,",
   "    xfh: q.headers['x-forwarded-host'] || null,",
   "    xfp: q.headers['x-forwarded-proto'] || null,",
   "  }));",
@@ -249,6 +250,22 @@ test('H-14: учётка панели не доходит до сайта, чу�
   assert.equal(realIp, '127.0.0.1', `X-Forwarded-For начинается с подделки: ${xfSeen.xff}`);
   assert.equal(xfSeen.xfh, 'echo3.local', `X-Forwarded-Host не из реестра: ${xfSeen.xfh}`);
   assert.equal(xfSeen.xfp, 'http', 'панель проксирует по http — апстрим должен видеть http');
+});
+
+test('PANEL_FORWARD_CLIENT_IP=1: адрес клиента от доверенного прокси доходит до приложения', async (t) => {
+  const { panel, tmp } = await withPanel(t, { PANEL_FORWARD_CLIENT_IP: '1' });
+  await uploadEchoSite(t, panel, tmp, 'echo3.local');
+
+  // Так выглядит запрос, пришедший от nginx на той же машине: XFF содержит
+  // адрес клиента, а сокет панели — loopback.
+  const r = await requestWithHeaders(panel.httpPort, 'echo3.local', '/', {
+    'X-Forwarded-For': '203.0.113.7',
+    'X-Real-IP': '1.2.3.4',
+  });
+  const seen = JSON.parse(r.body.toString('utf8'));
+  assert.equal(seen.xri, '203.0.113.7', 'приложению не передан x-real-ip клиента');
+  const hops = String(seen.xff).split(',').map((s) => s.trim());
+  assert.equal(hops[0], '203.0.113.7', `первый адрес XFF должен быть клиентским: ${seen.xff}`);
 });
 
 /* ---------- H-21: WebSocket-апгрейд и Origin ---------- */

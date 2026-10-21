@@ -355,12 +355,31 @@ function effectiveScheme(req, isHttps) {
  * подделанное «9.9.9.9» оставалось первым в списке. После очистки xfwd собирает
  * заголовки заново из реального сокета. X-Forwarded-Host xfwd не трогает —
  * ставим сами из проверенного hostOf (H-14).
+ *
+ * Если включён PANEL_FORWARD_CLIENT_IP и соединение пришло от доверенного
+ * фронт-прокси, берём последний адрес его X-Forwarded-For — это клиент —
+ * и передаём приложению (x-forwarded-for и x-real-ip). Иначе за nginx все
+ * запросы выглядели бы как 127.0.0.1 и IP-whitelist приложений не работал бы.
  */
 function sanitizeForwardHeaders(req, host) {
+  const incomingXff = typeof req.headers['x-forwarded-for'] === 'string'
+    ? req.headers['x-forwarded-for']
+    : '';
   for (const key of Object.keys(req.headers)) {
-    if (key.toLowerCase().startsWith('x-forwarded-')) delete req.headers[key];
+    const lower = key.toLowerCase();
+    if (lower.startsWith('x-forwarded-') || lower === 'x-real-ip') delete req.headers[key];
   }
   if (host) req.headers['x-forwarded-host'] = host;
+
+  if (config.forwardClientIp && incomingXff && trustedForwarder(req)) {
+    const hops = incomingXff.split(',').map((s) => s.trim()).filter(Boolean);
+    const client = hops.length ? hops[hops.length - 1] : '';
+    if (client) {
+      // xfwd допишет адрес сокета в конец; приложение берёт первый адрес
+      req.headers['x-forwarded-for'] = client;
+      req.headers['x-real-ip'] = client;
+    }
+  }
 }
 
 /**
