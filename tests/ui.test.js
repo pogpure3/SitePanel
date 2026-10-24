@@ -91,8 +91,7 @@ test('палитра: контраст текста >= 4.5:1 (WCAG AA), свет
 });
 
 test('палитра: акцентный текст читается в обеих темах', () => {
-  // .crumbs a и .brand b красятся в --accent: он обязан иметь контраст >= AA
-  // с фоном карточки в каждой теме.
+  // .crumbs a и .brand b красятся в --accent: он обязан иметь контраст >= AA.
   const dark = ratio(cssVar('accent'), cssVar('bg-card'));
   const light = ratio(cssVarLight('accent'), cssVarLight('bg-card'));
   assert.ok(dark >= AA, `--accent на карточке (тёмная): ${dark.toFixed(2)}:1`);
@@ -124,7 +123,7 @@ test('style.css: есть prefers-reduced-motion', () => {
 test('палитра: --primary не используется как цвет текста на тёмном фоне', () => {
   // --primary тёмный (рассчитан на белый текст кнопок) и как цвет текста
   // на тёмном фоне даёт < 4.5:1. Текстовые акценты — светлый #60a5fa.
-  const accent = '#60a5fa';
+  const accent = cssVar('accent');
   const r = ratio(accent, cssVar('bg'));
   assert.ok(r >= AA, `акцентный цвет ${accent} даёт ${r.toFixed(2)}:1 на фоне`);
 
@@ -137,6 +136,15 @@ test('палитра: --primary не используется как цвет т
     if (/(^|[;\s{])color:\s*var\(--primary\)/.test(m[2])) offenders.push(selector || m[1].trim());
   }
   assert.deepEqual(offenders, [], 'текст цветом var(--primary):\n' + offenders.join('\n'));
+});
+
+test('тёмная тема совпадает с порталом и принимает только его сообщения', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'src', 'admin', 'public', 'app.js'), 'utf8');
+  assert.equal(cssVar('bg'), '#101827');
+  assert.equal(cssVar('bg-card'), '#182235');
+  assert.equal(cssVar('border'), '#42506a');
+  assert.match(app, /event\.origin !== 'https:\/\/prtl\.evil-mesh\.ru'/);
+  assert.match(app, /setTheme\(event\.data\.theme === 'dark' \? 'dark' : 'light', false\)/);
 });
 
 test('style.css: шапка не ломает раскладку на узком экране', () => {

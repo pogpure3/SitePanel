@@ -96,12 +96,23 @@ function applyThemeIcon() {
   if (term) term.options.theme = terminalTheme();
 }
 
-function toggleTheme() {
-  const next = currentTheme() === 'dark' ? 'light' : 'dark';
+function setTheme(next, persist = true) {
   document.documentElement.setAttribute('data-theme', next);
-  try { localStorage.setItem('sp-theme', next); } catch { /* приватный режим */ }
+  if (persist) {
+    try { localStorage.setItem('sp-theme', next); } catch { /* приватный режим */ }
+  }
   applyThemeIcon();
 }
+
+function toggleTheme() {
+  setTheme(currentTheme() === 'dark' ? 'light' : 'dark');
+}
+
+window.addEventListener('message', (event) => {
+  if (event.source !== window.parent || event.origin !== 'https://prtl.evil-mesh.ru') return;
+  if (event.data?.type !== 'mesh-theme' || !['api', 'dark'].includes(event.data.theme)) return;
+  setTheme(event.data.theme === 'dark' ? 'dark' : 'light', false);
+});
 
 /* ---------- Модальные окна: доступность ---------- */
 

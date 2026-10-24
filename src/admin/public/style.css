@@ -7,28 +7,28 @@
 /* ---------- Токены: тёмная тема (по умолчанию) ---------- */
 
 :root {
-  --bg: #0f1117;
-  --bg-card: #171b23;
-  --bg-hover: #1e242e;
-  --sidebar: #0b0d12;
-  --border: #262c38;
-  --text: #e6e9f0;
-  --text-dim: #8b93a7;
+  --bg: #101827;
+  --bg-card: #182235;
+  --bg-hover: #304361;
+  --sidebar: #0e1625;
+  --border: #42506a;
+  --text: #e8edf6;
+  --text-dim: #8fa0bc;
   /* primary подобран под контраст >= 4.5:1 с белым текстом (WCAG AA).
      Было #3b82f6 — всего 2.98:1. */
   --primary: #2563eb;
   --primary-hover: #1d4ed8;
   /* Акцент для ссылок/активных элементов НА ТЕКСТЕ: --primary тёмный и
      как цвет текста на тёмном фоне даёт < 4.5:1. */
-  --accent: #60a5fa;
+  --accent: #9cc4ff;
   --green: #22c55e;
   --yellow: #eab308;
   --red: #ef4444;
   --radius: 10px;
   --radius-sm: 8px;
   --shadow: 0 1px 3px rgba(0, 0, 0, .35);
-  --topbar-bg: rgba(11, 13, 18, .88);
-  --backdrop: rgba(2, 6, 23, .75);
+  --topbar-bg: rgba(19, 27, 46, .92);
+  --backdrop: rgba(5, 9, 18, .80);
 }
 
 /* ---------- Светлая тема ---------- */
