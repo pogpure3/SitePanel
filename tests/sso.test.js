@@ -25,7 +25,7 @@ test('SSO билет портала создаёт сессию и не прох
   const signed = ticket();
   const post = () => fetch(panel.base + '/sso/callback', {
     method: 'POST', redirect: 'manual',
-    headers: { Origin: 'https://prtl.evil-mesh.ru', 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: { Origin: 'null', 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ ticket: signed }),
   });
   const first = await post();

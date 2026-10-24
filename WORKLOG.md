@@ -8,6 +8,36 @@
 
 ---
 
+## 2026-10-24 — Исправлен отказ SSO-билета в трёх проектах
+
+**Запрос.** После перехода из портала целевой проект отвечал `SSO ticket
+rejected` и не открывался.
+
+**Диагностика.** `D:\Projects\SitePanel\src\admin\sso.js`,
+`D:\Projects\pqr\routes\auth.js` и
+`D:\Projects\PF\API_progression\server.js` требовали точный заголовок
+`Origin: https://prtl.evil-mesh.ru` сверх проверки HMAC. Подпись секретом
+SitePanel и портала совпала; браузерный переход оставался зависим от Origin.
+
+**Изменения.** Во всех трёх приёмниках убрана проверка Origin; подпись HMAC,
+аудитория, срок 60 секунд и одноразовый `jti` сохранены. На `panel_test` файлы
+обновлены по путям `/opt/sitepanel/src/admin/sso.js`,
+`/opt/sitepanel/data/sites/238b5bbfec01/routes/auth.js`,
+`/opt/sitepanel/data/sites/3ac49e2f0d64/server.js`. Резервные копии рядом
+с каждым файлом с суффиксом `.bak.20261024-205407`. API контейнер пересобран
+с прежним томом `/opt/sitepanel/data/sites/3ac49e2f0d64/deploy/data`.
+После одновременного рестарта SitePanel и PQR возник конфликт порта 10001;
+лишний процесс остановлен, PQR запущен вручную, флаг `crashLoop` сброшен.
+
+**Проверка.** SitePanel `node --test tests/sso.test.js` — 1/1 с
+`Origin: null`, PQR `npm test` — 24/24, API `node --check server.js` — успешно.
+Подписанный билет с `Origin: null` через публичный HTTPS: SitePanel — 303,
+PQR — 200, API прокачки — 303. Главные страницы PQR и API — 200; SitePanel
+active, PQR `restartAttempts=0`, `crashLoop=false`.
+
+**Осталось.** Сам пользовательский браузер после обновления ещё не проверен.
+Плановая миграция с HMAC на OIDC не выполнена.
+
 ## 2026-10-24 — Исправлен браузерный переход SSO из Mesh Portal
 
 **Запрос.** При нажатии любой кнопки перехода браузер показывал

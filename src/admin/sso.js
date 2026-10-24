@@ -10,7 +10,6 @@ const { effectiveScheme } = require('../httpserver');
 const usedTickets = new Map();
 
 function validTicket(req, ticket) {
-  if (req.headers.origin !== 'https://prtl.evil-mesh.ru') return false;
   const secret = process.env.PANEL_SSO_SECRET;
   const [payload, signature] = String(ticket || '').split('.');
   if (!secret || !payload || !signature || String(ticket || '').split('.').length !== 2) return false;
