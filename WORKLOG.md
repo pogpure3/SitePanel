@@ -8,6 +8,30 @@
 
 ---
 
+## 2026-10-25 — Копирование токена API внутри Portal
+
+**Запрос.** Исправить ошибку «Не удалось скопировать» при копировании токена
+API прокачки, открытого в рабочей области Mesh Portal.
+
+**Диагностика.** `D:\Projects\PF\API_progression\public\app.js:45` использует
+`navigator.clipboard.writeText()`. API открывается с другого домена внутри iframe,
+но iframe в `D:\Projects\PF\Portal\server.js` не делегировал разрешение
+`clipboard-write`, поэтому браузер отклонял запись в буфер обмена.
+
+**Изменения.** В iframe рабочей области `D:\Projects\PF\Portal\server.js`
+добавлено точечное разрешение `allow="clipboard-write"`. В
+`D:\Projects\PF\Portal\test\portal.test.js` добавлена регрессионная проверка
+атрибута. На `panel_test` обновлён
+`/opt/sitepanel/data/sites/68c787d23af8/server.js`; копия до замены:
+`/opt/sitepanel/data/sites/68c787d23af8/server.js.bak.20261025-010314`.
+
+**Проверка.** `Portal npm test` — 6/6; `node --check server.js` — успешно.
+Публичный HTML `https://prtl.evil-mesh.ru/` содержит
+`allow="clipboard-write"`; Portal и API вернули 200, SitePanel active.
+
+**Осталось.** Нужна проверка фактической записи в системный буфер пользователя
+после обновления уже открытой страницы Portal.
+
 ## 2026-10-25 — Центрирование панели и выбор темы Portal
 
 **Запрос.** Убрать сдвиг выбора темы, вдвое сократить свободное пространство
