@@ -61,11 +61,14 @@
         <div class="topbar-right">
           <span class="sysinfo" id="sysInfo"></span>
           <button class="btn btn-primary btn-add" id="addSiteBtn"><svg class="icon"><use href="#i-plus"/></svg><span>Добавить сайт</span></button>
-          <select class="theme-select" id="themeSelect" aria-label="Тема">
-            <option value="api">Осень</option>
-            <option value="light">Светлая</option>
-            <option value="dark">Тёмная</option>
-          </select>
+          <div class="theme-picker" id="themePicker">
+            <button type="button" class="theme-toggle" id="themeSelect" aria-haspopup="menu" aria-expanded="false" aria-label="Тема"><span id="themeLabel">Тёмная</span></button>
+            <div class="theme-menu" id="themeMenu" role="menu" aria-label="Тема" hidden>
+              <button type="button" role="menuitemradio" aria-checked="false" data-theme-choice="api">Осень</button>
+              <button type="button" role="menuitemradio" aria-checked="false" data-theme-choice="light">Светлая</button>
+              <button type="button" role="menuitemradio" aria-checked="true" data-theme-choice="dark">Тёмная</button>
+            </div>
+          </div>
           <button class="icon-btn" id="logoutBtn" title="Выйти" aria-label="Выйти"><svg class="icon"><use href="#i-logout"/></svg></button>
         </div>
       </header>

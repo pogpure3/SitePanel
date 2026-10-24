@@ -140,6 +140,7 @@ test('палитра: --primary не используется как цвет т
 
 test('темы синхронизируются с порталом и SitePanel предлагает три варианта', () => {
   const app = fs.readFileSync(path.join(__dirname, '..', 'src', 'admin', 'public', 'app.js'), 'utf8');
+  const loginJs = fs.readFileSync(path.join(__dirname, '..', 'src', 'admin', 'public', 'login.js'), 'utf8');
   const index = fs.readFileSync(path.join(__dirname, '..', 'src', 'admin', 'public', 'index.html'), 'utf8');
   const login = fs.readFileSync(path.join(__dirname, '..', 'src', 'admin', 'public', 'login.html'), 'utf8');
   assert.equal(cssVar('bg'), '#101827');
@@ -149,10 +150,14 @@ test('темы синхронизируются с порталом и SitePanel
   assert.match(app, /setTheme\(event\.data\.theme, false\)/);
   assert.match(CSS, /\[data-theme="api"\]/);
   for (const html of [index, login]) {
-    assert.match(html, /<option value="api">Осень<\/option>/);
-    assert.match(html, /<option value="light">Светлая<\/option>/);
-    assert.match(html, /<option value="dark">Тёмная<\/option>/);
+    assert.doesNotMatch(html, /<select[^>]*theme/i);
+    assert.match(html, /data-theme-choice="api">Осень<\/button>/);
+    assert.match(html, /data-theme-choice="light">Светлая<\/button>/);
+    assert.match(html, /data-theme-choice="dark">Тёмная<\/button>/);
   }
+  assert.match(CSS, /\.theme-menu button:hover\s*\{\s*background:\s*var\(--theme-hover\)/);
+  assert.match(app, /event\.key !== 'Escape'/);
+  assert.match(loginJs, /event\.key !== 'Escape'/);
 });
 
 test('style.css: шапка не ломает раскладку на узком экране', () => {

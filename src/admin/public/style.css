@@ -29,6 +29,7 @@
   --shadow: 0 1px 3px rgba(0, 0, 0, .35);
   --topbar-bg: rgba(19, 27, 46, .92);
   --backdrop: rgba(5, 9, 18, .80);
+  --theme-hover: #1d293d;
 }
 
 /* ---------- Светлая тема ---------- */
@@ -48,6 +49,7 @@
   --shadow: 0 1px 3px rgba(16, 24, 40, .08);
   --topbar-bg: rgba(255, 255, 255, .88);
   --backdrop: rgba(15, 23, 42, .45);
+  --theme-hover: #f8fafc;
 }
 
 /* ---------- Тема «Осень» ---------- */
@@ -66,6 +68,7 @@
   --shadow: 0 6px 22px rgba(93, 62, 32, .08);
   --topbar-bg: rgba(255, 252, 248, .92);
   --backdrop: rgba(69, 43, 25, .42);
+  --theme-hover: #fbf6ef;
 }
 
 * { box-sizing: border-box; }
@@ -242,17 +245,64 @@ body.sidebar-collapsed .sidebar { align-items: stretch; }
 }
 .icon-btn:hover { background: var(--bg-hover); color: var(--text); }
 
-.theme-select {
-  height: 34px;
+.theme-picker {
+  position: relative;
   min-width: 112px;
+}
+
+.theme-toggle {
+  height: 34px;
+  width: 100%;
   padding: 0 30px 0 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
   color: var(--text);
   font: inherit;
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+  transition: background .15s;
+}
+.theme-toggle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: 11px;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-70%) rotate(45deg);
+}
+.theme-toggle:hover { background: var(--theme-hover); }
+.theme-menu {
+  position: absolute;
+  z-index: 500;
+  top: calc(100% + 4px);
+  right: 0;
+  width: 100%;
+  padding: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+}
+.theme-menu[hidden] { display: none; }
+.theme-menu button {
+  display: block;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
   cursor: pointer;
 }
+.theme-menu button:hover { background: var(--theme-hover); }
+.theme-menu button[aria-checked="true"] { background: var(--bg-hover); }
 
 .mobile-only { display: none; }
 

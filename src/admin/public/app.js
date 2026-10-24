@@ -7,6 +7,7 @@
    patchDashboard), чтобы интерфейс не мигал и не терял состояние. */
 
 const app = document.getElementById('app');
+const THEME_LABELS = { api: 'Осень', light: 'Светлая', dark: 'Тёмная' };
 let view = { name: 'dashboard' };
 let sitesCache = [];
 let pollTimer = null;
@@ -90,8 +91,11 @@ function currentTheme() {
 }
 
 function applyThemeControl() {
-  const select = document.getElementById('themeSelect');
-  if (select) select.value = currentTheme();
+  const theme = currentTheme();
+  document.getElementById('themeLabel').textContent = THEME_LABELS[theme];
+  document.querySelectorAll('[data-theme-choice]').forEach((choice) => {
+    choice.setAttribute('aria-checked', String(choice.dataset.themeChoice === theme));
+  });
   // Открытому терминалу тоже меняем палитру (term объявлен ниже по модулю,
   // но applyThemeControl вызывается только после инициализации).
   if (term) term.options.theme = terminalTheme();
@@ -549,7 +553,30 @@ document.getElementById('dashBtn').addEventListener('click', () => navigate({ na
 document.getElementById('terminalBtn').addEventListener('click', () => navigate({ name: 'terminal' }));
 document.getElementById('usersBtn').addEventListener('click', () => navigate({ name: 'users' }));
 document.getElementById('settingsBtn').addEventListener('click', () => navigate({ name: 'settings' }));
-document.getElementById('themeSelect').addEventListener('change', (event) => setTheme(event.target.value));
+const themeToggle = document.getElementById('themeSelect');
+const themeMenu = document.getElementById('themeMenu');
+function closeThemePicker() {
+  themeMenu.hidden = true;
+  themeToggle.setAttribute('aria-expanded', 'false');
+}
+themeToggle.addEventListener('click', () => {
+  themeMenu.hidden = !themeMenu.hidden;
+  themeToggle.setAttribute('aria-expanded', String(!themeMenu.hidden));
+});
+themeMenu.addEventListener('click', (event) => {
+  const choice = event.target.closest('[data-theme-choice]');
+  if (!choice) return;
+  setTheme(choice.dataset.themeChoice);
+  closeThemePicker();
+});
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('#themePicker')) closeThemePicker();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || themeMenu.hidden) return;
+  closeThemePicker();
+  themeToggle.focus();
+});
 applyThemeControl();
 
 // Выход: гасим сессию на сервере и возвращаемся на форму входа.

@@ -5,6 +5,7 @@
 
 (function () {
   /* ---------- Тема (как в панели: localStorage sp-theme) ---------- */
+  var themeLabels = { api: 'Осень', light: 'Светлая', dark: 'Тёмная' };
   var theme = null;
   try { theme = localStorage.getItem('sp-theme'); } catch (e) { /* приватный режим */ }
   if (theme !== 'api' && theme !== 'light' && theme !== 'dark') {
@@ -12,14 +13,37 @@
   }
   function applyTheme() {
     document.documentElement.setAttribute('data-theme', theme);
-    var select = document.getElementById('themeSelect');
-    if (select) select.value = theme;
+    document.getElementById('themeLabel').textContent = themeLabels[theme];
+    document.querySelectorAll('[data-theme-choice]').forEach(function (choice) {
+      choice.setAttribute('aria-checked', String(choice.getAttribute('data-theme-choice') === theme));
+    });
   }
   applyTheme();
-  document.getElementById('themeSelect').addEventListener('change', function () {
-    theme = this.value;
+  var themeToggle = document.getElementById('themeSelect');
+  var themeMenu = document.getElementById('themeMenu');
+  function closeThemePicker() {
+    themeMenu.hidden = true;
+    themeToggle.setAttribute('aria-expanded', 'false');
+  }
+  themeToggle.addEventListener('click', function () {
+    themeMenu.hidden = !themeMenu.hidden;
+    themeToggle.setAttribute('aria-expanded', String(!themeMenu.hidden));
+  });
+  themeMenu.addEventListener('click', function (event) {
+    var choice = event.target.closest('[data-theme-choice]');
+    if (!choice) return;
+    theme = choice.getAttribute('data-theme-choice');
     try { localStorage.setItem('sp-theme', theme); } catch (e) { /* noop */ }
     applyTheme();
+    closeThemePicker();
+  });
+  document.addEventListener('click', function (event) {
+    if (!event.target.closest('#themePicker')) closeThemePicker();
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape' || themeMenu.hidden) return;
+    closeThemePicker();
+    themeToggle.focus();
   });
 
   /* ---------- Показать/скрыть пароль ---------- */
