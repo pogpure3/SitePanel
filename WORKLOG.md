@@ -8,6 +8,54 @@
 
 ---
 
+## 2026-10-24 — Единый тестовый портал и SSO для трёх проектов
+
+**Запрос.** Создать единый вход на `prtl.evil-mesh.ru` для проектов тестового
+VPS, сохранив независимый прямой вход; учётная запись портала — `Admin@local`.
+Добавить смену и восстановление пароля с SMTP-настройками PQR, а также переходы
+в SitePanel, PQR и API прокачки.
+
+**Диагностика.** Проверено: `prtl.evil-mesh.ru` указывает на `46.29.164.250`;
+`pqr` использует JWT и `.env`, API прокачки — SQLite cookie-сессии, SitePanel —
+`sp_session`. В nginx не было server-блока для `prtl.evil-mesh.ru`, поэтому
+первый HTTP-01 challenge возвращал 404. ZIP-деплой PQR не сохраняет каталог
+`users`; это выявлено до завершения и восстановлено из автоматически созданного
+бэкапа сайта.
+
+**Изменения.** В `D:\Projects\PF\Portal` добавлены исходники портала,
+включая локальный пароль, его смену, ограниченное восстановление по SMTP и
+HMAC-билеты на 60 секунд. В репозитории SitePanel добавлены
+`src/admin/sso.js`, маршрут `POST /sso/callback` в `src/index.js` и тест
+`tests/sso.test.js` (коммит `dd91a03`). В PQR добавлены URL-encoded callback и
+выдача существующего JWT (`6777807`); в API прокачки — callback, одноразовые
+cookie-сессии и параметр compose (`1b0e131`, `9cabfbc`). На `panel_test`
+через менеджер панели развернут сайт `mesh-portal` (`id 68c787d23af8`, порт
+10002, домен `prtl.evil-mesh.ru`); секреты находятся только в
+`/opt/sitepanel/data/sites/68c787d23af8/data/` и `/etc/systemd/system/sitepanel.service.d/sso.conf`
+с правами 0600. SMTP в `/opt/sitepanel/data/sites/68c787d23af8/.env` перенесён
+только по ключам `SMTP_*` из PQR. Резервные копии до замены кода и `.env`:
+`/root/portal-sso-backup-20261024195906232`,
+`/root/portal-sso-backup-20261024200053020`; прежний пустой каталог PQR сохранён
+как `/opt/sitepanel/data/sites/238b5bbfec01/users.deployed-empty.20261024-201300`,
+данные пользователей восстановлены из
+`/opt/sitepanel/data/sites/238b5bbfec01.backup/users`. Создан nginx-конфиг
+`/etc/nginx/sites-available/prtl`, включён ссылкой
+`/etc/nginx/sites-enabled/prtl`; его HTTP-вариант сохранён в
+`/etc/nginx/sites-available/prtl.bak.20261024-200500`. Выпущен Let’s Encrypt
+сертификат и подключён из `/opt/sitepanel/data/certs/68c787d23af8/`.
+
+**Проверка.** Локально: `Portal npm test` — 1/1, `node --test tests/sso.test.js`
+в SitePanel — 1/1, `pqr npm test` — 24/24, `node --check` API прокачки — успешно.
+На `panel_test`: `nginx -t` — successful, `systemctl is-active sitepanel` —
+active, `https://prtl.evil-mesh.ru` — 200. Подписанный билет портала принят:
+SitePanel — 303, PQR — 200 с JWT-страницей, API прокачки — 303.
+
+**Осталось.** Это тестовый HMAC-мост с общим секретом для трёх клиентов. Перед
+подключением новых или production-проектов заменить его на OIDC-провайдер с
+отдельными client credentials и аудитом. Восстановление пароля SMTP намеренно
+не вызывалось при проверке: оно меняет пароль. Исходники портала ещё не помещены
+в закрытый Git-репозиторий по просьбе владельца.
+
 ## 2026-10-23 — Удалён бэкап перед выкладкой 2c045a9
 
 **Запрос.** «старый бекап удали» — после выкладки `09227b0` в `/root`
