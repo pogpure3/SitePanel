@@ -51,6 +51,27 @@ test('H-02: hostOf разбирает IPv6-литерал и порт', () => {
   assert.equal(hostOf(req('evil .test')), '');
 });
 
+test('Portal — единственный разрешённый предок встроенной админ-панели', () => {
+  const { securityHeaders } = require('../src/httpserver');
+  const headersFor = (host) => {
+    const headers = new Map();
+    securityHeaders(
+      { headers: { host }, path: '/', socket: { remoteAddress: '127.0.0.1' }, secure: false },
+      { setHeader: (name, value) => headers.set(name.toLowerCase(), value) },
+      () => {}
+    );
+    return headers;
+  };
+
+  const embedded = headersFor('panel.evil-mesh.ru');
+  assert.equal(embedded.get('x-frame-options'), undefined);
+  assert.match(embedded.get('content-security-policy'), /frame-ancestors https:\/\/prtl\.evil-mesh\.ru/);
+
+  const ordinary = headersFor('other.evil-mesh.ru');
+  assert.equal(ordinary.get('x-frame-options'), 'DENY');
+  assert.match(ordinary.get('content-security-policy'), /frame-ancestors 'none'/);
+});
+
 /* ---------- Вспомогательное ---------- */
 
 async function withPanel(t, env) {

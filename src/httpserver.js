@@ -16,6 +16,13 @@ const acme = require('./ssl/acme');
 const manager = require('./sites/manager');
 const auth = require('./auth');
 
+const PORTAL_FRAME_ORIGIN = 'https://prtl.evil-mesh.ru';
+const PORTAL_FRAME_HOSTS = new Set([
+  'panel.evil-mesh.ru',
+  'pqr.evil-mesh.ru',
+  'apitest.evil-mesh.ru',
+]);
+
 // Таймаут обязателен: без него зависший апстрим (приложение сайта приняло
 // соединение и не отвечает) держал сокет и дескрипторы до бесконечности, а клиент
 // не получал ни ответа, ни обрыва (H-06). Используется ИМЕННО `proxyTimeout`:
@@ -311,11 +318,21 @@ function realInside(root, target) {
  * и каждый размещённый сайт шёл без nosniff/X-Frame-Options — встраиваемым в
  * iframe (кликджекинг) и подверженным MIME-sniffing, а заглушки — ещё и без CSP.
  */
-function applySiteSecurityHeaders(res, effectiveHttps) {
+function portalFrameAllowed(host) {
+  return PORTAL_FRAME_HOSTS.has(host);
+}
+
+function applySiteSecurityHeaders(res, effectiveHttps, host) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  // SAMEORIGIN, а не DENY: отсекает чужие origin (кликджекинг), но не ломает
-  // валидный фрейминг сайта на его же домене.
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  if (portalFrameAllowed(host)) {
+    // X-Frame-Options не умеет безопасно разрешить другой origin. CSP задаёт
+    // единственного разрешённого предка вместо снятия защиты целиком.
+    res.setHeader('Content-Security-Policy', `frame-ancestors ${PORTAL_FRAME_ORIGIN}`);
+  } else {
+    // SAMEORIGIN отсекает чужие origin (кликджекинг), но не ломает фрейминг
+    // сайта на его же домене.
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  }
   res.setHeader('Referrer-Policy', 'no-referrer');
   if (effectiveHttps) {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000');
@@ -458,7 +475,7 @@ function route(req, res, isHttps) {
   // клиент, попавший напрямую на HTTP-порт, раньше этим заголовком гасил
   // редирект на HTTPS и влиял на HSTS.
   const effectiveHttps = effectiveScheme(req, isHttps) === 'https';
-  applySiteSecurityHeaders(res, effectiveHttps);
+  applySiteSecurityHeaders(res, effectiveHttps, host);
 
   // ACME http-01 challenge — приоритетнее всего, схема не важна
   // (через прокси challenge может прийти уже по https).
@@ -645,9 +662,12 @@ const ADMIN_CSP = [
  */
 function securityHeaders(req, res, next) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
+  const allowPortalFrame = portalFrameAllowed(hostOf(req));
+  if (!allowPortalFrame) res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Content-Security-Policy', ADMIN_CSP);
+  res.setHeader('Content-Security-Policy', allowPortalFrame
+    ? ADMIN_CSP.replace("frame-ancestors 'none'", `frame-ancestors ${PORTAL_FRAME_ORIGIN}`)
+    : ADMIN_CSP);
   res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
   if (effectiveScheme(req, Boolean(req.secure)) === 'https') {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000');
