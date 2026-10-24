@@ -2,7 +2,7 @@
 
 /* SitePanel — фронтенд админ-панели (vanilla JS).
    Оболочка в стиле nginx-ui: боковое меню, шапка с хлебной крошкой,
-   тёмная/светлая темы. Страница строится один раз; периодический опрос
+   три темы оформления. Страница строится один раз; периодический опрос
    обновляет только изменившиеся элементы (patchRow / patchDetail /
    patchDashboard), чтобы интерфейс не мигал и не терял состояние. */
 
@@ -85,33 +85,31 @@ async function apiUpload(path, formData, onProgress) {
 /* ---------- Тема ---------- */
 
 function currentTheme() {
-  return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  const theme = document.documentElement.getAttribute('data-theme');
+  return ['api', 'light', 'dark'].includes(theme) ? theme : 'dark';
 }
 
-function applyThemeIcon() {
-  const use = document.querySelector('#themeBtn use');
-  if (use) use.setAttribute('href', currentTheme() === 'dark' ? '#i-sun' : '#i-moon');
+function applyThemeControl() {
+  const select = document.getElementById('themeSelect');
+  if (select) select.value = currentTheme();
   // Открытому терминалу тоже меняем палитру (term объявлен ниже по модулю,
-  // но applyThemeIcon вызывается только после инициализации).
+  // но applyThemeControl вызывается только после инициализации).
   if (term) term.options.theme = terminalTheme();
 }
 
 function setTheme(next, persist = true) {
+  if (!['api', 'light', 'dark'].includes(next)) next = 'dark';
   document.documentElement.setAttribute('data-theme', next);
   if (persist) {
     try { localStorage.setItem('sp-theme', next); } catch { /* приватный режим */ }
   }
-  applyThemeIcon();
-}
-
-function toggleTheme() {
-  setTheme(currentTheme() === 'dark' ? 'light' : 'dark');
+  applyThemeControl();
 }
 
 window.addEventListener('message', (event) => {
   if (event.source !== window.parent || event.origin !== 'https://prtl.evil-mesh.ru') return;
-  if (event.data?.type !== 'mesh-theme' || !['api', 'dark'].includes(event.data.theme)) return;
-  setTheme(event.data.theme === 'dark' ? 'dark' : 'light', false);
+  if (event.data?.type !== 'mesh-theme' || !['api', 'light', 'dark'].includes(event.data.theme)) return;
+  setTheme(event.data.theme, false);
 });
 
 /* ---------- Модальные окна: доступность ---------- */
@@ -551,8 +549,8 @@ document.getElementById('dashBtn').addEventListener('click', () => navigate({ na
 document.getElementById('terminalBtn').addEventListener('click', () => navigate({ name: 'terminal' }));
 document.getElementById('usersBtn').addEventListener('click', () => navigate({ name: 'users' }));
 document.getElementById('settingsBtn').addEventListener('click', () => navigate({ name: 'settings' }));
-document.getElementById('themeBtn').addEventListener('click', toggleTheme);
-applyThemeIcon();
+document.getElementById('themeSelect').addEventListener('change', (event) => setTheme(event.target.value));
+applyThemeControl();
 
 // Выход: гасим сессию на сервере и возвращаемся на форму входа.
 document.getElementById('logoutBtn').addEventListener('click', async () => {

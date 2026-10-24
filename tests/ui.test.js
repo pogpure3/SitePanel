@@ -138,13 +138,21 @@ test('палитра: --primary не используется как цвет т
   assert.deepEqual(offenders, [], 'текст цветом var(--primary):\n' + offenders.join('\n'));
 });
 
-test('тёмная тема совпадает с порталом и принимает только его сообщения', () => {
+test('темы синхронизируются с порталом и SitePanel предлагает три варианта', () => {
   const app = fs.readFileSync(path.join(__dirname, '..', 'src', 'admin', 'public', 'app.js'), 'utf8');
+  const index = fs.readFileSync(path.join(__dirname, '..', 'src', 'admin', 'public', 'index.html'), 'utf8');
+  const login = fs.readFileSync(path.join(__dirname, '..', 'src', 'admin', 'public', 'login.html'), 'utf8');
   assert.equal(cssVar('bg'), '#101827');
   assert.equal(cssVar('bg-card'), '#182235');
   assert.equal(cssVar('border'), '#42506a');
   assert.match(app, /event\.origin !== 'https:\/\/prtl\.evil-mesh\.ru'/);
-  assert.match(app, /setTheme\(event\.data\.theme === 'dark' \? 'dark' : 'light', false\)/);
+  assert.match(app, /setTheme\(event\.data\.theme, false\)/);
+  assert.match(CSS, /\[data-theme="api"\]/);
+  for (const html of [index, login]) {
+    assert.match(html, /<option value="api">Осень<\/option>/);
+    assert.match(html, /<option value="light">Светлая<\/option>/);
+    assert.match(html, /<option value="dark">Тёмная<\/option>/);
+  }
 });
 
 test('style.css: шапка не ломает раскладку на узком экране', () => {

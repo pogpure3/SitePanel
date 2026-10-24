@@ -20,12 +20,22 @@
       --red: #ef4444;
     }
     [data-theme="light"] {
-      --bg: #f4f6f9;
+      --bg: #f5f7fb;
       --bg-card: #ffffff;
-      --bg-hover: #eef1f6;
-      --border: #dfe3ec;
-      --text: #1c2230;
-      --text-dim: #5d6575;
+      --bg-hover: #eef2f7;
+      --border: #d8e0ea;
+      --text: #172033;
+      --text-dim: #5f6b7d;
+    }
+    [data-theme="api"] {
+      --bg: #f6f1e9;
+      --bg-card: #fffcf8;
+      --bg-hover: #fbeadb;
+      --border: #e3d4c1;
+      --text: #32261c;
+      --text-dim: #756154;
+      --primary: #9c4a1e;
+      --primary-hover: #7d3917;
     }
     * { box-sizing: border-box; }
     html, body { height: 100%; }
@@ -63,6 +73,7 @@
     .brand-name { font-size: 19px; font-weight: 600; }
     .brand-name b { color: #9cc4ff; }
     [data-theme="light"] .brand-name b { color: #1d4ed8; }
+    [data-theme="api"] .brand-name b { color: #9c4a1e; }
     h1 { font-size: 15px; font-weight: 400; color: var(--text-dim); text-align: center; margin: 0 0 22px; }
     label { display: block; font-size: 13px; color: var(--text-dim); margin-bottom: 14px; }
     .pass-wrap { position: relative; margin-top: 6px; }
@@ -128,17 +139,15 @@
       position: fixed;
       top: 14px;
       right: 14px;
-      width: 36px;
       height: 36px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
+      min-width: 112px;
+      padding: 0 30px 0 10px;
       background: var(--bg-card);
       border: 1px solid var(--border);
       border-radius: 8px;
-      color: var(--text-dim);
+      color: var(--text);
       cursor: pointer;
-      font-size: 16px;
+      font: inherit;
     }
     .login-theme:hover { color: var(--text); }
     :focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
@@ -148,7 +157,11 @@
   </style>
 </head>
 <body>
-  <button class="login-theme" id="themeBtn" title="Переключить тему" aria-label="Переключить тему"></button>
+  <select class="login-theme" id="themeSelect" aria-label="Тема">
+    <option value="api">Осень</option>
+    <option value="light">Светлая</option>
+    <option value="dark">Тёмная</option>
+  </select>
 
   <main class="login-card">
     <div class="brand">

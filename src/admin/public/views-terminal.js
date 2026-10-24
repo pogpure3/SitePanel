@@ -12,13 +12,15 @@ let termResizeHandler = null;
 let termSeq = 0;        // отменяет устаревшие подключения
 
 function terminalTheme() {
-  const dark = currentTheme() === 'dark';
+  const theme = currentTheme();
+  const dark = theme === 'dark';
+  const autumn = theme === 'api';
   return {
-    background: dark ? '#0b0e14' : '#ffffff',
-    foreground: dark ? '#e6e9f0' : '#1c2230',
-    cursor: dark ? '#60a5fa' : '#1d4ed8',
-    cursorAccent: dark ? '#0b0e14' : '#ffffff',
-    selectionBackground: dark ? 'rgba(96, 165, 250, .30)' : 'rgba(37, 99, 235, .20)',
+    background: dark ? '#0b0e14' : autumn ? '#fffaf4' : '#ffffff',
+    foreground: dark ? '#e6e9f0' : autumn ? '#32261c' : '#172033',
+    cursor: dark ? '#60a5fa' : autumn ? '#9c4a1e' : '#1d4ed8',
+    cursorAccent: dark ? '#0b0e14' : autumn ? '#fffaf4' : '#ffffff',
+    selectionBackground: dark ? 'rgba(96, 165, 250, .30)' : autumn ? 'rgba(196, 98, 45, .20)' : 'rgba(29, 78, 216, .18)',
     black: '#0b0e14', brightBlack: '#64748b',
     red: '#ef4444', green: '#22c55e', yellow: '#eab308',
     blue: '#60a5fa', magenta: '#c084fc', cyan: '#22d3ee', white: '#e6e9f0',

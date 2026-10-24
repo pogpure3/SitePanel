@@ -1,6 +1,6 @@
 /* SitePanel — стили админ-панели.
    Дизайн по референсу nginx-ui: боковое меню, шапка с хлебной крошкой,
-   карточки, тёмная и светлая темы (переключатель в шапке, выбор сохраняется).
+   карточки и три темы (переключатель в шапке, выбор сохраняется).
    Палитры подобраны под контраст >= 4.5:1 (WCAG AA) — тест ui-badge.test.js
    проверяет обе темы, меняй цвета с оглядкой на него. */
 
@@ -34,13 +34,13 @@
 /* ---------- Светлая тема ---------- */
 
 [data-theme="light"] {
-  --bg: #f4f6f9;
+  --bg: #f5f7fb;
   --bg-card: #ffffff;
-  --bg-hover: #eef1f6;
+  --bg-hover: #eef2f7;
   --sidebar: #ffffff;
-  --border: #dfe3ec;
-  --text: #1c2230;
-  --text-dim: #5d6575;
+  --border: #d8e0ea;
+  --text: #172033;
+  --text-dim: #5f6b7d;
   /* Тот же синий, что и в тёмной теме: белый текст на нём держит >= 4.5:1. */
   --primary: #2563eb;
   --primary-hover: #1d4ed8;
@@ -48,6 +48,24 @@
   --shadow: 0 1px 3px rgba(16, 24, 40, .08);
   --topbar-bg: rgba(255, 255, 255, .88);
   --backdrop: rgba(15, 23, 42, .45);
+}
+
+/* ---------- Тема «Осень» ---------- */
+
+[data-theme="api"] {
+  --bg: #f6f1e9;
+  --bg-card: #fffcf8;
+  --bg-hover: #fbeadb;
+  --sidebar: #fffaf4;
+  --border: #e3d4c1;
+  --text: #32261c;
+  --text-dim: #756154;
+  --primary: #9c4a1e;
+  --primary-hover: #7d3917;
+  --accent: #9c4a1e;
+  --shadow: 0 6px 22px rgba(93, 62, 32, .08);
+  --topbar-bg: rgba(255, 252, 248, .92);
+  --backdrop: rgba(69, 43, 25, .42);
 }
 
 * { box-sizing: border-box; }
@@ -224,6 +242,18 @@ body.sidebar-collapsed .sidebar { align-items: stretch; }
 }
 .icon-btn:hover { background: var(--bg-hover); color: var(--text); }
 
+.theme-select {
+  height: 34px;
+  min-width: 112px;
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
 .mobile-only { display: none; }
 
 /* Контент: карточки на всю ширину колонки. */
@@ -364,8 +394,10 @@ input[type="text"], input[type="password"], input[type="email"], select, textare
   font-size: 13px;
   font-family: inherit;
 }
-[data-theme="light"] input, [data-theme="light"] select, [data-theme="light"] textarea {
-  background: #fff;
+:is([data-theme="light"], [data-theme="api"]) input,
+:is([data-theme="light"], [data-theme="api"]) select,
+:is([data-theme="light"], [data-theme="api"]) textarea {
+  background: var(--bg-card);
 }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--primary); }
 ::placeholder { color: var(--text-dim); opacity: .8; }
@@ -399,11 +431,11 @@ label.checkbox input { width: auto; }
 }
 .badge.type { color: var(--accent); border-color: var(--primary); }
 .badge.ssl-ok { color: #4ade80; border-color: var(--green); }
-[data-theme="light"] .badge.ssl-ok { color: #15803d; }
+:is([data-theme="light"], [data-theme="api"]) .badge.ssl-ok { color: #15803d; }
 .badge.ssl-pending { color: var(--yellow); border-color: #a16207; }
-[data-theme="light"] .badge.ssl-pending { color: #854d0e; }
+:is([data-theme="light"], [data-theme="api"]) .badge.ssl-pending { color: #854d0e; }
 .badge.ssl-error { color: #f87171; border-color: var(--red); }
-[data-theme="light"] .badge.ssl-error { color: #b91c1c; }
+:is([data-theme="light"], [data-theme="api"]) .badge.ssl-error { color: #b91c1c; }
 .badge.loop-bad { color: #fecaca; border-color: #b91c1c; background: #450a0a; }
 .badge.loop-warn { color: #fde68a; border-color: #a16207; background: #422006; }
 
@@ -498,7 +530,7 @@ label.checkbox input { width: auto; }
   padding: 7px 12px;
   font-size: 13px;
 }
-[data-theme="light"] .domain-row { background: #fff; }
+:is([data-theme="light"], [data-theme="api"]) .domain-row { background: var(--bg-card); }
 .domain-row .remove {
   background: none; border: none; color: var(--text-dim); cursor: pointer;
   font-size: 15px; padding: 2px 6px; border-radius: 6px;
@@ -674,7 +706,7 @@ label.checkbox input { width: auto; }
   border-radius: var(--radius-sm);
   padding: 12px 14px 16px;
 }
-[data-theme="light"] .stepper-card { background: #fff; }
+:is([data-theme="light"], [data-theme="api"]) .stepper-card { background: var(--bg-card); }
 
 .stepper-label { font-size: 12.5px; color: var(--text-dim); }
 
@@ -687,7 +719,7 @@ label.checkbox input { width: auto; }
   overflow: hidden;
   background: var(--bg-card);
 }
-[data-theme="light"] .stepper { background: #fff; }
+:is([data-theme="light"], [data-theme="api"]) .stepper { background: var(--bg-card); }
 
 .stepper input {
   width: 56px;

@@ -7,17 +7,17 @@
   /* ---------- Тема (как в панели: localStorage sp-theme) ---------- */
   var theme = null;
   try { theme = localStorage.getItem('sp-theme'); } catch (e) { /* приватный режим */ }
-  if (theme !== 'light' && theme !== 'dark') {
+  if (theme !== 'api' && theme !== 'light' && theme !== 'dark') {
     theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
   }
   function applyTheme() {
     document.documentElement.setAttribute('data-theme', theme);
-    var btn = document.getElementById('themeBtn');
-    if (btn) btn.textContent = theme === 'dark' ? '☀' : '☾';
+    var select = document.getElementById('themeSelect');
+    if (select) select.value = theme;
   }
   applyTheme();
-  document.getElementById('themeBtn').addEventListener('click', function () {
-    theme = theme === 'dark' ? 'light' : 'dark';
+  document.getElementById('themeSelect').addEventListener('change', function () {
+    theme = this.value;
     try { localStorage.setItem('sp-theme', theme); } catch (e) { /* noop */ }
     applyTheme();
   });
