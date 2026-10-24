@@ -19,6 +19,7 @@ const { createServers, listenServers, securityHeaders } = require('./httpserver'
 const adminRoutes = require('./admin/routes');
 const terminal = require('./admin/terminal');
 const login = require('./admin/login');
+const sso = require('./admin/sso');
 
 // Защита от повторного входа в шатдаун (два сигнала подряд).
 let shuttingDown = false;
@@ -87,6 +88,7 @@ async function main() {
   app.get('/login.js', login.loginScript);
   app.post('/api/login', express.json({ limit: '16kb' }), login.loginApi);
   app.post('/api/logout', login.logoutApi);
+  app.post('/sso/callback', express.urlencoded({ extended: false, limit: '8kb' }), sso.callback);
   app.use(auth.middleware);
   // Лимит согласован с редактором файлов (EDIT_MAX_BYTES = 2 МБ в admin/routes.js):
   // при 1mb запрос на 1.5 МБ падал с HTML-страницей Express вместо JSON панели.
