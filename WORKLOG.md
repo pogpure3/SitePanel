@@ -8,6 +8,73 @@
 
 ---
 
+## 2026-10-25 — Обновление panel_beget и развёртывание Portal/API/Monitor
+
+**Запрос.** Обновить SitePanel на `panel_beget`, развернуть Mesh Portal на
+`portal.evil-mesh.ru`, API прокачки на `pfapi.evil-mesh.ru` и добавить в общий
+портал существующие сайты Beget, включая Monitor из `pogpure3/MeshClient/monitor`.
+
+**Диагностика.** На `panel_beget` работали `pg` (`88b1b76605e9`, порт 10000) и
+`mesh-monitor` (`3ebc4e88346e`, порт 10001); свободно 23 ГБ, Docker отсутствовал.
+Оба новых домена уже указывали на `141.133.197.43`. API на `panel_test` содержал
+10 318 315 строк в `words`, рабочая SQLite-база занимала 1,9 ГБ. Прежний запрет
+устанавливать Docker сохранён: API подготовлен как обычный Node-сайт.
+
+**Изменения.** Репозиторий и сервер:
+
+- SitePanel разрешает встраивание доменов Beget только из
+  `https://portal.evil-mesh.ru`; правила `prtl.evil-mesh.ru` сохранены. Архив
+  кода `/root/sitepanel-20261025-221136.tar.gz` (sha256
+  `8f8f064dcea9a0e7f1478c5b118bdce92aa97dade422251128567c54df97935a`)
+  распакован в `/opt/sitepanel`; зависимости обновлены, служба перезапущена.
+- Создан общий SSO-секрет в `/opt/sitepanel/data/secrets/portal-sso` и drop-in
+  `/etc/systemd/system/sitepanel.service.d/sso.conf`; оба файла секретов имеют
+  права `0600`, значения в журнал не записывались.
+- `pg` обновлён из `D:\Projects\pqr` с сохранением `.env` и каталога `users/`.
+  `mesh-monitor` обновлён из `D:\Projects\PF\MeshClient\monitor`; сохранены
+  `config.json` и `state.json`, добавлен SSO без отключения Basic auth.
+- Через API панели созданы `mesh-portal` (`c72c65031020`, порт 10002) и
+  `api-progression` (`d47116633264`, порт 10003). Portal получил прежний
+  `auth.json` и SMTP-настройки с `panel_test`, новый SSO-секрет и адреса
+  SitePanel, PQR, API, Monitor на Beget.
+- Для API выполнен online-backup SQLite через `node:sqlite backup()` без остановки
+  источника. Проверены sha256
+  `58f4d19ef26036ce46fc57b6c2742ff345d3d9fe150c3b773a05e4e7a78416f5`
+  и `PRAGMA quick_check = ok`; база установлена в
+  `/opt/sitepanel/data/sites/d47116633264/data/pumping.db`.
+- Добавлены `/etc/nginx/sites-available/portal` и `pfapi` с symlink в
+  `sites-enabled`; `nginx -t` выполнен до reload. Certbot и SitePanel выпустили
+  сертификаты для обоих доменов, срок внешних сертификатов — до 2027-01-23.
+- Временные снимки и архивы удалены после проверки; исходная база `panel_test`
+  не изменена.
+
+**Резервные копии и откат.** Созданы:
+
+- `/root/sitepanel-code-backup-20261025-221136.tar.gz` — 405 КБ, sha256
+  `9610e4eb6239094567a7ffff46d0b3ad5b216456ceb0de12474ef191fdd84c1e`;
+- `/root/sitepanel-data-backup-20261025-221136.tar.gz` — 14 МБ, sha256
+  `929805688adf1c72b972a1588c43c86918c162fc7ebcf1d81e7a19f50b3ba269`;
+- `/root/nginx-backup-20261025-221136.tar.gz` — sha256
+  `11332a72005b862008e3763b97b469bd8c24ab9e59314b1fcd48b33ef4d58d1f`;
+- `/root/api-fresh-data-backup-20261025-221136.tar.gz` — sha256
+  `5a239bffcb1e1774db07cc6b5938b245a3f1c78de8c815a5614f87b942ef7cc0`.
+
+SitePanel также оставил штатные `.backup` прежних версий `pg` и Monitor.
+
+**Проверка.** Локально: Portal 9/9, API 9/9, PQR 27/27, MeshClient основной
+набор — pass, Monitor e2e — pass. SitePanel: 209 pass, 21 skip; три прежних
+Windows-сбоя T-32/T-43/T-44, затронутые SSO/CSP/UI тесты проходят. На сервере
+`sitepanel` и `nginx` active/enabled, все четыре сайта `running`, предупреждений
+деплоя нет. Внешние Portal/API вернули 200 за 0,053/0,019 с. SSO: SitePanel 303,
+PQR 200 с выдачей JWT, API 303, Monitor 303. CSP всех четырёх целей содержит
+`frame-ancestors https://portal.evil-mesh.ru`. API с разрешённым IP вернул 200;
+для постороннего IP штатно вернул `no access`. После миграции в БД 10 318 315
+запросов. Свободно 21 ГБ.
+
+**Осталось.** Docker на `panel_beget` не установлен. Monitor развёрнут готовым
+архивом: его TypeScript-сборка использует `../src` монорепозитория, поэтому
+обновление только из Git-подкаталога без предварительной сборки не подходит.
+
 ## 2026-10-25 — Перезагрузка и проверка panel_test
 
 **Запрос.** Перезагрузить тестовый VPS `panel_test` и проверить автоматический

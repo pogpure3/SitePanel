@@ -146,7 +146,7 @@ test('темы синхронизируются с порталом и SitePanel
   assert.equal(cssVar('bg'), '#101827');
   assert.equal(cssVar('bg-card'), '#182235');
   assert.equal(cssVar('border'), '#42506a');
-  assert.match(app, /event\.origin !== 'https:\/\/prtl\.evil-mesh\.ru'/);
+  assert.match(app, /'https:\/\/prtl\.evil-mesh\.ru', 'https:\/\/portal\.evil-mesh\.ru'/);
   assert.match(app, /setTheme\(event\.data\.theme, false\)/);
   assert.match(CSS, /\[data-theme="api"\]/);
   for (const html of [index, login]) {

@@ -16,11 +16,15 @@ const acme = require('./ssl/acme');
 const manager = require('./sites/manager');
 const auth = require('./auth');
 
-const PORTAL_FRAME_ORIGIN = 'https://prtl.evil-mesh.ru';
-const PORTAL_FRAME_HOSTS = new Set([
-  'panel.evil-mesh.ru',
-  'pqr.evil-mesh.ru',
-  'apitest.evil-mesh.ru',
+const PORTAL_FRAME_ORIGINS = new Map([
+  ['panel.evil-mesh.ru', 'https://prtl.evil-mesh.ru'],
+  ['pqr.evil-mesh.ru', 'https://prtl.evil-mesh.ru'],
+  ['apitest.evil-mesh.ru', 'https://prtl.evil-mesh.ru'],
+  ['beget.evil-mesh.ru', 'https://portal.evil-mesh.ru'],
+  ['pg.evil-mesh.ru', 'https://portal.evil-mesh.ru'],
+  ['p.evil-mesh.ru', 'https://portal.evil-mesh.ru'],
+  ['pfapi.evil-mesh.ru', 'https://portal.evil-mesh.ru'],
+  ['m.evil-mesh.ru', 'https://portal.evil-mesh.ru'],
 ]);
 
 // Таймаут обязателен: без него зависший апстрим (приложение сайта приняло
@@ -318,16 +322,17 @@ function realInside(root, target) {
  * и каждый размещённый сайт шёл без nosniff/X-Frame-Options — встраиваемым в
  * iframe (кликджекинг) и подверженным MIME-sniffing, а заглушки — ещё и без CSP.
  */
-function portalFrameAllowed(host) {
-  return PORTAL_FRAME_HOSTS.has(host);
+function portalFrameOrigin(host) {
+  return PORTAL_FRAME_ORIGINS.get(host) || null;
 }
 
 function applySiteSecurityHeaders(res, effectiveHttps, host) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  if (portalFrameAllowed(host)) {
+  const frameOrigin = portalFrameOrigin(host);
+  if (frameOrigin) {
     // X-Frame-Options не умеет безопасно разрешить другой origin. CSP задаёт
     // единственного разрешённого предка вместо снятия защиты целиком.
-    res.setHeader('Content-Security-Policy', `frame-ancestors ${PORTAL_FRAME_ORIGIN}`);
+    res.setHeader('Content-Security-Policy', `frame-ancestors ${frameOrigin}`);
   } else {
     // SAMEORIGIN отсекает чужие origin (кликджекинг), но не ломает фрейминг
     // сайта на его же домене.
@@ -662,11 +667,11 @@ const ADMIN_CSP = [
  */
 function securityHeaders(req, res, next) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  const allowPortalFrame = portalFrameAllowed(hostOf(req));
-  if (!allowPortalFrame) res.setHeader('X-Frame-Options', 'DENY');
+  const frameOrigin = portalFrameOrigin(hostOf(req));
+  if (!frameOrigin) res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Content-Security-Policy', allowPortalFrame
-    ? ADMIN_CSP.replace("frame-ancestors 'none'", `frame-ancestors ${PORTAL_FRAME_ORIGIN}`)
+  res.setHeader('Content-Security-Policy', frameOrigin
+    ? ADMIN_CSP.replace("frame-ancestors 'none'", `frame-ancestors ${frameOrigin}`)
     : ADMIN_CSP);
   res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
   if (effectiveScheme(req, Boolean(req.secure)) === 'https') {

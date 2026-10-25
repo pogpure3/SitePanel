@@ -111,7 +111,7 @@ function setTheme(next, persist = true) {
 }
 
 window.addEventListener('message', (event) => {
-  if (event.source !== window.parent || event.origin !== 'https://prtl.evil-mesh.ru') return;
+  if (event.source !== window.parent || !['https://prtl.evil-mesh.ru', 'https://portal.evil-mesh.ru'].includes(event.origin)) return;
   if (event.data?.type !== 'mesh-theme' || !['api', 'light', 'dark'].includes(event.data.theme)) return;
   setTheme(event.data.theme, false);
 });
