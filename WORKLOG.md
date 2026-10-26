@@ -8,6 +8,84 @@
 
 ---
 
+## 2026-10-26 — Единый визуальный стиль проектов на panel_beget
+
+**Запрос.** Обновить production-стенд `panel_beget` после унификации визуального
+стиля проектов с API прокачки.
+**Диагностика.** `sitepanel` и `nginx` были active; каталоги SitePanel, Mesh
+Portal (`c72c65031020`), PQR (`88b1b76605e9`), Monitor (`3ebc4e88346e`) и API
+прокачки (`d47116633264`) присутствовали. API прокачки уже являлся эталоном и
+не требовал замены файлов.
+**Изменения.** На сервере обновлены
+`/opt/sitepanel/src/admin/public/{style.css,index.html,login.html,app.js}`,
+`/opt/sitepanel/src/httpserver.js`, `/opt/sitepanel/tests/ui.test.js`,
+`/opt/sitepanel/data/sites/c72c65031020/server.js`,
+`/opt/sitepanel/data/sites/88b1b76605e9/public/{style.css,index.html,script.js}`,
+`/opt/sitepanel/data/sites/88b1b76605e9/tests/api.test.js` и
+`/opt/sitepanel/data/sites/3ebc4e88346e/public/index.html`. Выполнен
+`systemctl restart sitepanel`. Архивы отката:
+`/root/sitepanel-ui-before-20261026-133621.tar.gz`
+(`df8e43338ba35a83db1cc656f0d5289e83d620290cc24a3bacea43ac66f885a6`),
+`/root/portal-ui-before-20261026-133621.tar.gz`
+(`0f8862374207df5f14c6ee1bf380e5c040d7886941429d1ea58427fbd804bc24`),
+`/root/pqr-ui-before-20261026-133621.tar.gz`
+(`3d08d4a125ffbf8b4c8255e09381b4e4845ae03ecb0a6c55946fbca2b920137d`) и
+`/root/monitor-ui-before-20261026-133621.tar.gz`
+(`d023cb83e4f2238db7bb41ea3288128339a30199a97bdd1d8f658a50b3e5d8b3`).
+**Проверка.** Загруженные JS-файлы прошли `node --check`. На сервере PQR —
+28/28, SitePanel UI — 13 pass / 9 skip / 0 fail. `sitepanel` и `nginx` active,
+failed units — 0. Portal, PQR и API прокачки возвращают HTTP 200; Monitor и
+SitePanel без авторизации — ожидаемый 401. В production-браузере темы «Осень»,
+«Светлая» и «Тёмная» проверены на страницах входа Portal и PQR. Monitor:
+опубликованный SHA-256 совпадает с локальным
+`f377a3d9ed15d6eeecc44c90f8407b6516818f017cf6d6695796ded2acf62f9b`,
+авторизованный локальный `/api/state` — 200, `linkUp=true`, 27 устройств.
+**Осталось.** Авторизованные экраны production Portal, SitePanel, API и Monitor
+не открывались в браузере: пароль Portal в текущей сессии отсутствует. Их тот же
+код и все три темы ранее проверены на `panel_test`; серверные проверки успешны.
+
+## 2026-10-26 — Единый визуальный стиль проектов на panel_test
+
+**Запрос.** Привести SitePanel, Mesh Portal, PQR и Monitor к визуальному стилю
+API прокачки во всех темах и проверить размещённые проекты на `panel_test`.
+**Диагностика.** Палитры уже синхронизировались через Portal, но проекты
+использовали разные радиусы, границы, тени, шрифты и состояния кнопок. На
+`panel_test` SitePanel и PQR принимали тему только от `prtl.evil-mesh.ru`, тогда
+как локальный код также поддерживал `portal.evil-mesh.ru`.
+**Изменения.** Локально в `D:\Projects\SitePanel\src\admin\public\style.css`,
+`index.html`, `login.html`, `D:\Projects\SitePanel\src\httpserver.js` и
+`D:\Projects\SitePanel\tests\ui.test.js` применены Manrope, карточки 20 px,
+поля и кнопки 12 px, мягкое активное меню, общие границы, тени, focus-состояния
+и фон темы «Осень». CSP точечно разрешает `fonts.googleapis.com` и
+`fonts.gstatic.com`; URL CSS версионирован. Такие же изменения внесены в
+`D:\Projects\PF\Portal\server.js`, `D:\Projects\pqr\public\style.css` и
+`D:\Projects\PF\MeshClient\monitor\public\index.html` с regression-тестами.
+API прокачки оставлен источником визуального контракта без правок.
+
+На `panel_test` обновлены `/opt/sitepanel/src/admin/public/{style.css,index.html,login.html,app.js}`,
+`/opt/sitepanel/src/httpserver.js`, `/opt/sitepanel/tests/ui.test.js`,
+`/opt/sitepanel/data/sites/68c787d23af8/{server.js,test/portal.test.js}` и
+`/opt/sitepanel/data/sites/238b5bbfec01/public/{style.css,index.html,script.js}`,
+`/opt/sitepanel/data/sites/238b5bbfec01/tests/api.test.js`. Сервис `sitepanel`
+перезапущен. Архивы отката в `/root`: `sitepanel-ui-before-20261026-122839.tar.gz`
+(`44b6f8ed…`), `portal-ui-before-20261026-122839.tar.gz` (`adf35e77…`),
+`pqr-ui-before-20261026-122839.tar.gz` (`542fdd85…`),
+`portal-tests-before-20261026-122839.tar.gz` (`a690030f…`),
+`pqr-tests-before-20261026-122839.tar.gz` (`4df75b32…`),
+`sitepanel-tests-before-20261026-122839.tar.gz` (`fc9daaa9…`),
+`pqr-theme-sync-before-20261026-122839.tar.gz` (`ac6cc721…`) и
+`sitepanel-theme-sync-before-20261026-122839.tar.gz` (`2c658ba2…`).
+**Проверка.** Локально: Portal 9/9, PQR 28/28, API прокачки 10/10; MeshClient
+build, Monitor build, основной набор и Monitor e2e — pass. SitePanel UI 22/22;
+полный `npm test`: 210 pass, 21 skip, 3 прежних Windows durability-сбоя
+T-32/T-43/T-44 (`ECONNRESET`, освобождение порта, удаление временного каталога).
+На `panel_test`: Portal 9/9, PQR 28/28, SitePanel UI 13 pass / 9 skip / 0 fail;
+`sitepanel` и `nginx` active, failed units — 0. Portal/PQR/API — HTTP 200,
+SitePanel без Basic Auth — ожидаемый 401. В реальном браузере проверены все три
+темы и SSO-переходы Portal → SitePanel/PQR/API на desktop и ширине 390 px.
+**Осталось.** Monitor отсутствует на `panel_test`, поэтому проверен локально.
+При недоступности Google Fonts используется системный резервный шрифт.
+
 ## 2026-10-25 — Копирование API прокачки внутри Portal на panel_beget
 
 **Запрос.** Исправить ошибку «Не удалось скопировать» у ссылок API прокачки,

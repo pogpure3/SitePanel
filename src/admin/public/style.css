@@ -8,9 +8,11 @@
 
 :root {
   --bg: #101827;
+  --bg-soft: #131b2e;
   --bg-card: #182235;
   --bg-hover: #304361;
   --sidebar: #0e1625;
+  --border-soft: #2b3a5c;
   --border: #42506a;
   --text: #e8edf6;
   --text-dim: #8fa0bc;
@@ -24,9 +26,10 @@
   --green: #22c55e;
   --yellow: #eab308;
   --red: #ef4444;
-  --radius: 10px;
-  --radius-sm: 8px;
-  --shadow: 0 1px 3px rgba(0, 0, 0, .35);
+  --radius: 20px;
+  --radius-sm: 12px;
+  --shadow: 0 8px 32px rgba(0, 0, 0, .35);
+  --shadow-soft: 0 2px 10px rgba(0, 0, 0, .25);
   --topbar-bg: rgba(19, 27, 46, .92);
   --backdrop: rgba(5, 9, 18, .80);
   --theme-hover: #1d293d;
@@ -36,17 +39,20 @@
 
 [data-theme="light"] {
   --bg: #f5f7fb;
+  --bg-soft: #ffffff;
   --bg-card: #ffffff;
-  --bg-hover: #eef2f7;
+  --bg-hover: #e8eeff;
   --sidebar: #ffffff;
-  --border: #d8e0ea;
+  --border-soft: #d8e0ea;
+  --border: #b8c4d4;
   --text: #172033;
   --text-dim: #5f6b7d;
   /* Тот же синий, что и в тёмной теме: белый текст на нём держит >= 4.5:1. */
   --primary: #2563eb;
   --primary-hover: #1d4ed8;
   --accent: #1d4ed8;
-  --shadow: 0 1px 3px rgba(16, 24, 40, .08);
+  --shadow: 0 12px 32px rgba(15, 23, 42, .09);
+  --shadow-soft: 0 2px 8px rgba(15, 23, 42, .06);
   --topbar-bg: rgba(255, 255, 255, .88);
   --backdrop: rgba(15, 23, 42, .45);
   --theme-hover: #f8fafc;
@@ -56,16 +62,19 @@
 
 [data-theme="api"] {
   --bg: #f6f1e9;
+  --bg-soft: #fbf7f1;
   --bg-card: #fffcf8;
   --bg-hover: #fbeadb;
-  --sidebar: #fffaf4;
+  --sidebar: #fbf6ef;
+  --border-soft: #f0e5d7;
   --border: #e3d4c1;
   --text: #32261c;
   --text-dim: #756154;
   --primary: #9c4a1e;
   --primary-hover: #7d3917;
   --accent: #9c4a1e;
-  --shadow: 0 6px 22px rgba(93, 62, 32, .08);
+  --shadow: 0 6px 22px rgba(93, 62, 32, .07);
+  --shadow-soft: 0 2px 10px rgba(93, 62, 32, .05);
   --topbar-bg: rgba(255, 252, 248, .92);
   --backdrop: rgba(69, 43, 25, .42);
   --theme-hover: #fbf6ef;
@@ -77,9 +86,15 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
+  font-family: "Manrope", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+[data-theme="api"] body {
+  background:
+    radial-gradient(1200px 500px at 15% -10%, #fbefdf 0%, rgba(251, 239, 223, 0) 60%),
+    radial-gradient(900px 420px at 90% 0%, #f7eddf 0%, rgba(247, 237, 223, 0) 55%),
+    var(--bg);
 }
 
 code {
@@ -113,7 +128,7 @@ code {
   width: 224px;
   flex-shrink: 0;
   background: var(--sidebar);
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--border-soft);
   display: flex;
   flex-direction: column;
   position: sticky;
@@ -173,8 +188,8 @@ code {
   white-space: nowrap;
 }
 .nav-item:hover { background: var(--bg-hover); color: var(--text); }
-/* Активный пункт — синяя «пилюля», как в референсе. */
-.nav-item.active { background: var(--primary); color: #fff; }
+/* Активный пункт повторяет мягкую акцентную плашку API прокачки. */
+.nav-item.active { background: var(--bg-hover); color: var(--accent); }
 .nav-item.active .icon { stroke-width: 2.2; }
 .nav-label { overflow: hidden; text-overflow: ellipsis; }
 
@@ -213,7 +228,7 @@ body.sidebar-collapsed .sidebar { align-items: stretch; }
   padding: 8px 20px;
   min-height: 56px;
   background: var(--topbar-bg);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-soft);
   position: sticky;
   top: 0;
   z-index: 50;
@@ -251,7 +266,7 @@ body.sidebar-collapsed .sidebar { align-items: stretch; }
 }
 
 .theme-toggle {
-  height: 34px;
+  height: 38px;
   width: 100%;
   padding: 0 30px 0 10px;
   border: 1px solid var(--border);
@@ -333,9 +348,10 @@ main {
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 7px 14px;
+  padding: 9px 18px;
   font-size: 13px;
   font-family: inherit;
+  font-weight: 700;
   cursor: pointer;
   transition: background .15s, border-color .15s;
   white-space: nowrap;
@@ -354,7 +370,7 @@ main {
 .btn-danger { background: #7f1d1d; border-color: #991b1b; color: #fff; }
 .btn-danger:hover { background: #991b1b; }
 .btn-ghost { background: transparent; }
-.btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn-sm { padding: 6px 13px; border-radius: 10px; font-size: 12.5px; }
 .btn-add span { white-space: nowrap; }
 
 /* Видимый фокус для клавиатуры: смена border-color одна не читается.
@@ -402,11 +418,11 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 
 .panel {
   background: var(--bg-card);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  padding: 18px;
-  margin-bottom: 14px;
+  padding: 20px 22px;
+  margin-bottom: 16px;
 }
 .panel h2 {
   margin: 0 0 12px;
@@ -440,8 +456,8 @@ input[type="text"], input[type="password"], input[type="email"], select, textare
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: var(--radius-sm);
-  padding: 8px 12px;
-  font-size: 13px;
+  padding: 10px 14px;
+  font-size: 13.5px;
   font-family: inherit;
 }
 :is([data-theme="light"], [data-theme="api"]) input,
@@ -454,6 +470,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 
 label.checkbox { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 label.checkbox input { width: auto; }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); }
 
 /* ---------- Статусы и бейджи ---------- */
 
@@ -493,7 +510,7 @@ label.checkbox input { width: auto; }
 
 .table-card {
   background: var(--bg-card);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   overflow-x: auto;
@@ -637,8 +654,8 @@ label.checkbox input { width: auto; }
 
 .modal {
   background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 20px;
   padding: 24px;
   width: 100%;
   max-width: 520px;

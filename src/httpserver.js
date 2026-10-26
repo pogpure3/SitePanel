@@ -647,13 +647,14 @@ function listenServers({ httpServer, httpsServer }) {
 
 // CSP для админки: скрипты только внешним файлом (/app.js), инлайновых <script> нет.
 // style-src допускает inline — разметка собирается строками со style="...".
+// Manrope загружается с тех же двух Google Fonts origin, что и API прокачки.
 const ADMIN_CSP = [
   "default-src 'self'",
   "script-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "img-src 'self' data:",
   "connect-src 'self'",
-  "font-src 'self' data:",
+  "font-src 'self' data: https://fonts.gstatic.com",
   "object-src 'none'",
   "base-uri 'none'",
   "form-action 'self'",

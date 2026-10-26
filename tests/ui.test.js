@@ -170,6 +170,17 @@ test('style.css: видимый фокус для клавиатуры', () => {
   assert.match(CSS, /:focus-visible\s*\{/, 'нет правил :focus-visible');
 });
 
+test('style.css: компоненты следуют геометрии API прокачки', () => {
+  const httpserver = fs.readFileSync(path.join(__dirname, '..', 'src', 'httpserver.js'), 'utf8');
+  assert.match(ruleBlock(':root'), /--radius:\s*20px/);
+  assert.match(ruleBlock(':root'), /--radius-sm:\s*12px/);
+  assert.match(CSS, /\.btn\s*\{[^}]*padding:\s*9px 18px[^}]*font-weight:\s*700/s);
+  assert.match(CSS, /\.panel\s*\{[^}]*padding:\s*20px 22px/s);
+  assert.match(CSS, /font-family:\s*"Manrope"/);
+  assert.match(httpserver, /style-src 'self' 'unsafe-inline' https:\/\/fonts\.googleapis\.com/);
+  assert.match(httpserver, /font-src 'self' data: https:\/\/fonts\.gstatic\.com/);
+});
+
 test('index.html: модалки и поля доступны', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'admin', 'public', 'index.html'), 'utf8');
   const dialogs = html.match(/role="dialog"/g) || [];
