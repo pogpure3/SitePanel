@@ -8,6 +8,60 @@
 
 ---
 
+## 2026-10-26 — Синие акценты светлой темы API прокачки на panel_beget
+
+**Запрос.** Опубликовать на `panel_beget` исправление светлой темы API
+прокачки: синие primary-кнопки, графики, мини-полосы и range-слайдер.
+**Диагностика.** Сайт `api-progression` размещён в
+`/opt/sitepanel/data/sites/d47116633264`, публичный домен —
+`pfapi.evil-mesh.ru`. Статика приложения предзагружается в память при
+старте, поэтому после замены файлов origin продолжал отдавать прежний CSS
+до перезапуска процесса сайта.
+**Изменения.** Создан архив
+`/root/api-light-theme-before-20261026-155000.tar.gz`
+(`228c9e8b0c08b27ed92beeedba3cf6b7d5065f17e39d80feb7a141c92cdac8c4`).
+Обновлены `public/style.css` и `public/index.html`; SHA-256 опубликованных
+файлов совпал с локальным. Перезапущен только процесс API, новый PID `105704`.
+**Проверка.** `http://127.0.0.1:10003/` вернул HTTP 200. Публичные
+`https://pfapi.evil-mesh.ru/` и CSS с параметром
+`v=20261026-light-blue` содержат актуальную версию и синий `#2563EB`.
+`sitepanel` и `nginx` active. База
+`/opt/sitepanel/data/sites/d47116633264/data/pumping.db` сохранена, размер
+3679326208 байта.
+**Осталось.** Визуальная проверка на `panel_beget` не повторялась: тот же
+артефакт уже визуально проверен на `panel_test` перед публикацией.
+
+## 2026-10-26 — Синие акценты светлой темы API прокачки на panel_test
+
+**Запрос.** В светлой теме API прокачки заменить осенние оранжевые акценты
+графиков, кнопок и двойного range-слайдера на синие и опубликовать на
+`panel_test`.
+**Диагностика.** В `D:\Projects\PF\API_progression\public\style.css`
+светлая тема задавала синий `--accent`, но primary-кнопки, столбцы графика,
+мини-полосы и заполнение range-слайдера использовали жёстко заданные
+оранжевые градиенты.
+**Изменения.** Добавлены точечные light-theme overrides для primary-кнопок,
+графиков, progress/mini-bar и range-слайдера. В
+`D:\Projects\PF\API_progression\public\index.html` добавлена версия CSS
+`20261026-light-blue`; регрессии добавлены в
+`D:\Projects\PF\API_progression\test\words-stats.test.js`.
+
+На `panel_test` создан архив
+`/root/api-light-theme-before-20261026-151604.tar.gz`
+(`6a29a964f389f3d3a5c702433960bb0056316b944e0d3cd92194175094ed7bf5`).
+Обновлены файлы сайта `/opt/sitepanel/data/sites/3ac49e2f0d64/public/style.css`,
+`public/index.html` и `test/words-stats.test.js`; контейнер
+`sitepanel-3ac49e2f0d64-pumping-api-1` пересобран и пересоздан через Compose.
+**Проверка.** Локально `npm test`: 10 pass, 0 fail. На стенде контейнер
+`Up`, `http://127.0.0.1:10000/` и `https://apitest.evil-mesh.ru/` вернули
+HTTP 200. База `/opt/sitepanel/data/sites/3ac49e2f0d64/deploy/data/pumping.db`
+сохранена, размер 2021343232 байта. Через `https://prtl.evil-mesh.ru/`
+визуально проверены синие range-слайдер, primary-кнопка, столбцы графика и
+мини-полосы в светлой теме. `sitepanel` и `nginx` active, failed units нет.
+**Осталось.** Серверный `node --test` не запускается на Node 20.20.2 из-за
+отсутствия встроенного `node:sqlite`; приложение работает в контейнере Node 24,
+а полный локальный прогон прошёл.
+
 ## 2026-10-26 — Публикация виджета дисковой активности на panel_beget
 
 **Запрос.** Опубликовать на `panel_beget` отдельный виджет чтения/записи
