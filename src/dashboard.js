@@ -1,17 +1,18 @@
 'use strict';
 
-// Дашборд: периодические замеры CPU / памяти / диска с историей.
+// Дашборд: периодические замеры CPU / памяти / диска / сети с историей.
 // CPU — дельта счётчиков os.cpus() между замерами (кроссплатформенно);
 // память на Linux — из /proc/meminfo (учитывает кэши как доступные);
-// диск — df по каталогу данных (раз в минуту, чтобы не спамить).
+// диск — statfs/df по каталогу данных; сеть на Linux — /proc/net/dev.
 
 const os = require('os');
 const fs = require('fs');
+const path = require('path');
 const { execFile } = require('child_process');
 const { config } = require('./config');
 
 const HISTORY_MAX = 120; // 10 минут при замере раз в 5с
-const history = { cpu: [], mem: [] };
+const history = { cpu: [], mem: [], disk: [], diskIo: { read: [], write: [] }, network: { rx: [], tx: [] } };
 
 let lastCpuTimes = cpuTimes();
 let cpuPct = null;
@@ -19,6 +20,10 @@ let lastMem = readMem();
 let disk = null;
 let diskError = null;
 let diskCheckedAt = 0;
+let lastNetwork = readNetworkTotals();
+let network = lastNetwork ? { interface: lastNetwork.interface, rx: null, tx: null } : null;
+let lastDiskIo = readDiskIoTotals();
+let diskIo = lastDiskIo ? { device: lastDiskIo.device, read: null, write: null } : null;
 
 function cpuTimes() {
   let idle = 0;
@@ -57,6 +62,110 @@ function readMem() {
   const total = os.totalmem();
   const available = os.freemem();
   return { total, available, used: total - available };
+}
+
+function parseNetworkStats(raw, interfaceName) {
+  const stats = [];
+  for (const line of raw.split(/\r?\n/).slice(2)) {
+    const match = /^\s*([^:]+):\s*(.+)$/.exec(line);
+    if (!match || match[1].trim() === 'lo') continue;
+    const values = match[2].trim().split(/\s+/).map(Number);
+    if (values.length < 16 || values.some((value) => !Number.isFinite(value))) continue;
+    stats.push({ interface: match[1].trim(), rx: values[0], tx: values[8] });
+  }
+  if (interfaceName) return stats.find((item) => item.interface === interfaceName) || null;
+  if (!stats.length) return null;
+  return stats.reduce((sum, item) => ({ interface: 'все', rx: sum.rx + item.rx, tx: sum.tx + item.tx }), { rx: 0, tx: 0 });
+}
+
+function readNetworkTotals() {
+  try {
+    const route = fs.readFileSync('/proc/net/route', 'utf8').split(/\r?\n/)
+      .map((line) => line.trim().split(/\s+/))
+      .find((cols) => cols[1] === '00000000' && (parseInt(cols[3], 16) & 2));
+    return parseNetworkStats(fs.readFileSync('/proc/net/dev', 'utf8'), route ? route[0] : null);
+  } catch {
+    return null;
+  }
+}
+
+function sampleNetwork(nowMs = Date.now()) {
+  const current = readNetworkTotals();
+  if (!current) {
+    lastNetwork = null;
+    network = null;
+    return;
+  }
+  if (!lastNetwork || current.interface !== lastNetwork.interface) {
+    lastNetwork = { ...current, sampledAt: nowMs };
+    network = { interface: current.interface, rx: null, tx: null };
+    return;
+  }
+  const elapsedSec = (nowMs - (lastNetwork.sampledAt || nowMs)) / 1000;
+  network = {
+    interface: current.interface,
+    rx: elapsedSec > 0 ? Math.max(0, Math.round((current.rx - lastNetwork.rx) / elapsedSec)) : null,
+    tx: elapsedSec > 0 ? Math.max(0, Math.round((current.tx - lastNetwork.tx) / elapsedSec)) : null,
+  };
+  lastNetwork = { ...current, sampledAt: nowMs };
+}
+
+function findMountDevice(raw, targetPath) {
+  const target = path.posix.resolve(String(targetPath).replace(/\\/g, '/'));
+  let best = null;
+  for (const line of raw.split(/\r?\n/)) {
+    const fields = line.split(' - ')[0].trim().split(/\s+/);
+    if (fields.length < 5 || !/^\d+:\d+$/.test(fields[2])) continue;
+    const mountpoint = fields[4].replace(/\\([0-7]{3})/g, (_match, octal) => String.fromCharCode(parseInt(octal, 8)));
+    const matches = mountpoint === '/' ? target.startsWith('/') : target === mountpoint || target.startsWith(mountpoint + '/');
+    if (!matches || (best && best.mountpoint.length >= mountpoint.length)) continue;
+    const [major, minor] = fields[2].split(':').map(Number);
+    best = { major, minor, mountpoint };
+  }
+  return best;
+}
+
+function parseDiskStats(raw, major, minor) {
+  for (const line of raw.split(/\r?\n/)) {
+    const fields = line.trim().split(/\s+/);
+    if (fields.length < 14 || Number(fields[0]) !== major || Number(fields[1]) !== minor) continue;
+    const readSectors = Number(fields[5]);
+    const writtenSectors = Number(fields[9]);
+    if (!Number.isFinite(readSectors) || !Number.isFinite(writtenSectors)) return null;
+    return { device: fields[2], readBytes: readSectors * 512, writeBytes: writtenSectors * 512 };
+  }
+  return null;
+}
+
+function readDiskIoTotals() {
+  try {
+    const mount = findMountDevice(fs.readFileSync('/proc/self/mountinfo', 'utf8'), config.dataDir);
+    if (!mount) return null;
+    return parseDiskStats(fs.readFileSync('/proc/diskstats', 'utf8'), mount.major, mount.minor);
+  } catch {
+    return null;
+  }
+}
+
+function sampleDiskIo(nowMs = Date.now()) {
+  const current = readDiskIoTotals();
+  if (!current) {
+    lastDiskIo = null;
+    diskIo = null;
+    return;
+  }
+  if (!lastDiskIo || current.device !== lastDiskIo.device) {
+    lastDiskIo = { ...current, sampledAt: nowMs };
+    diskIo = { device: current.device, read: null, write: null };
+    return;
+  }
+  const elapsedSec = (nowMs - (lastDiskIo.sampledAt || nowMs)) / 1000;
+  diskIo = {
+    device: current.device,
+    read: elapsedSec > 0 ? Math.max(0, Math.round((current.readBytes - lastDiskIo.readBytes) / elapsedSec)) : null,
+    write: elapsedSec > 0 ? Math.max(0, Math.round((current.writeBytes - lastDiskIo.writeBytes) / elapsedSec)) : null,
+  };
+  lastDiskIo = { ...current, sampledAt: nowMs };
 }
 
 // df -kP как резерв для старых Node/нестандартных ФС.
@@ -117,9 +226,17 @@ async function refreshDisk() {
 function tick() {
   cpuPct = sampleCpu();
   lastMem = readMem();
-  push(history.cpu, { t: Date.now(), v: cpuPct });
-  push(history.mem, { t: Date.now(), v: lastMem.total ? Math.round((lastMem.used / lastMem.total) * 100) : null });
-  if (!disk || Date.now() - diskCheckedAt > 60000) {
+  const now = Date.now();
+  sampleNetwork(now);
+  sampleDiskIo(now);
+  push(history.cpu, { t: now, v: cpuPct });
+  push(history.mem, { t: now, v: lastMem.total ? Math.round((lastMem.used / lastMem.total) * 100) : null });
+  if (disk) push(history.disk, { t: now, v: disk.pct });
+  if (network && network.rx !== null) push(history.network.rx, { t: now, v: network.rx });
+  if (network && network.tx !== null) push(history.network.tx, { t: now, v: network.tx });
+  if (diskIo && diskIo.read !== null) push(history.diskIo.read, { t: now, v: diskIo.read });
+  if (diskIo && diskIo.write !== null) push(history.diskIo.write, { t: now, v: diskIo.write });
+  if (!disk || now - diskCheckedAt > 60000) {
     refreshDisk();
   }
 }
@@ -146,6 +263,8 @@ function snapshot() {
     mem: { ...lastMem, pct: lastMem.total ? Math.round((lastMem.used / lastMem.total) * 100) : null },
     disk,
     diskError,
+    diskIo,
+    network,
     server: {
       hostname: os.hostname(),
       platform: `${os.type()} ${os.arch()}`,
@@ -157,8 +276,17 @@ function snapshot() {
     history: {
       cpu: history.cpu.slice(-60),
       mem: history.mem.slice(-60),
+      disk: history.disk.slice(-60),
+      diskIo: {
+        read: history.diskIo.read.slice(-60),
+        write: history.diskIo.write.slice(-60),
+      },
+      network: {
+        rx: history.network.rx.slice(-60),
+        tx: history.network.tx.slice(-60),
+      },
     },
   };
 }
 
-module.exports = { start, snapshot, refreshDisk };
+module.exports = { start, snapshot, refreshDisk, parseNetworkStats, findMountDevice, parseDiskStats };

@@ -75,6 +75,13 @@ test('UI: дашборд, hash-роутинг, домены, health-полоск
   await page.goto(panel.base + '/#/', { waitUntil: 'networkidle' });
   await page.waitForSelector('h1');
   assert.ok(await page.locator('h1', { hasText: 'Дашборд' }).count(), 'дашборд не отрисован');
+  assert.ok(await page.locator('#dDiskSpark').count(), 'нет графика использования диска');
+  assert.ok(await page.locator('#dNetworkSpark').count(), 'нет графика сетевой нагрузки');
+  assert.equal(await page.locator('#dNetworkRx').count(), 1, 'нет скорости приёма');
+  assert.equal(await page.locator('#dNetworkTx').count(), 1, 'нет скорости передачи');
+  assert.ok(await page.locator('#dDiskIoSpark').count(), 'нет графика чтения/записи диска');
+  assert.equal(await page.locator('#dDiskRead').count(), 1, 'нет скорости чтения диска');
+  assert.equal(await page.locator('#dDiskWrite').count(), 1, 'нет скорости записи диска');
 
   // U-12: прямая ссылка #/sites/<id> открывает страницу сайта (закладки работают).
   // Same-document навигация (смена только хеша) резолвится мгновенно — ждём DOM.

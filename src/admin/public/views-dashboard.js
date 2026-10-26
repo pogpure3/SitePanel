@@ -21,6 +21,27 @@ function sparkline(points, color, max) {
   </svg>`;
 }
 
+function dualSparkline(firstPoints, secondPoints, ariaLabel) {
+  const first = (firstPoints || []).filter((point) => point.v !== null && point.v !== undefined);
+  const second = (secondPoints || []).filter((point) => point.v !== null && point.v !== undefined);
+  if (first.length < 2 && second.length < 2) return '<div class="spark-empty">Собираем данные...</div>';
+  const W = 300, H = 56, PAD = 2;
+  const top = Math.max(1, ...first.map((point) => point.v), ...second.map((point) => point.v));
+  const line = (points) => {
+    if (points.length < 2) return '';
+    const step = (W - PAD * 2) / (points.length - 1);
+    return points.map((point, i) => `${PAD + i * step},${(H - PAD - point.v / top * (H - PAD * 2)).toFixed(1)}`).join(' ');
+  };
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="spark" role="img" aria-label="${ariaLabel}">
+    <polyline points="${line(first)}" fill="none" stroke="#34d399" stroke-width="1.8" stroke-linejoin="round"/>
+    <polyline points="${line(second)}" fill="none" stroke="#fbbf24" stroke-width="1.8" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+function fmtRate(value) {
+  return value === null || value === undefined ? '—' : fmtBytes(value) + '/с';
+}
+
 function ring(pct, color) {
   const R = 26, C = 2 * Math.PI * R;
   const off = C * (1 - Math.min(100, Math.max(0, pct || 0)) / 100);
@@ -68,6 +89,25 @@ function renderDashboard(data) {
           <div class="dash-row" id="dDiskRing"></div>
           <div class="hint" id="dDiskDetail" style="margin-top:6px"></div>
           <div class="disk-bar"><div class="disk-bar-fill" id="dDiskBar"></div></div>
+          <div id="dDiskSpark">${sparkline(data.history.disk, '#34d399', 100)}</div>
+        </div>
+
+        <div class="panel dash-card">
+          <h2>Сеть <span class="hint" id="dNetworkInterface"></span></h2>
+          <div class="rate-values">
+            <div><span class="rate-dot rate-first"></span><span class="hint">Приём</span><strong id="dNetworkRx">${fmtRate(data.network && data.network.rx)}</strong></div>
+            <div><span class="rate-dot rate-second"></span><span class="hint">Передача</span><strong id="dNetworkTx">${fmtRate(data.network && data.network.tx)}</strong></div>
+          </div>
+          <div id="dNetworkSpark">${dualSparkline(data.history.network.rx, data.history.network.tx, 'Приём и передача по сети')}</div>
+        </div>
+
+        <div class="panel dash-card">
+          <h2>Дисковая активность <span class="hint" id="dDiskDevice"></span></h2>
+          <div class="rate-values">
+            <div><span class="rate-dot rate-first"></span><span class="hint">Чтение</span><strong id="dDiskRead">${fmtRate(data.diskIo && data.diskIo.read)}</strong></div>
+            <div><span class="rate-dot rate-second"></span><span class="hint">Запись</span><strong id="dDiskWrite">${fmtRate(data.diskIo && data.diskIo.write)}</strong></div>
+          </div>
+          <div id="dDiskIoSpark">${dualSparkline(data.history.diskIo.read, data.history.diskIo.write, 'Чтение и запись диска')}</div>
         </div>
 
         <div class="panel dash-card">
@@ -91,6 +131,15 @@ function patchDashboard(data) {
   document.getElementById('dMemDetail').textContent = `${fmtBytes(data.mem.used)} из ${fmtBytes(data.mem.total)}`;
   document.getElementById('dCpuSpark').innerHTML = sparkline(data.history.cpu, '#60a5fa');
   document.getElementById('dMemSpark').innerHTML = sparkline(data.history.mem, '#a78bfa', 100);
+  document.getElementById('dDiskSpark').innerHTML = sparkline(data.history.disk, '#34d399', 100);
+  document.getElementById('dNetworkInterface').textContent = data.network ? data.network.interface : 'недоступно';
+  document.getElementById('dNetworkRx').textContent = fmtRate(data.network && data.network.rx);
+  document.getElementById('dNetworkTx').textContent = fmtRate(data.network && data.network.tx);
+  document.getElementById('dNetworkSpark').innerHTML = dualSparkline(data.history.network.rx, data.history.network.tx, 'Приём и передача по сети');
+  document.getElementById('dDiskDevice').textContent = data.diskIo ? data.diskIo.device : 'недоступно';
+  document.getElementById('dDiskRead').textContent = fmtRate(data.diskIo && data.diskIo.read);
+  document.getElementById('dDiskWrite').textContent = fmtRate(data.diskIo && data.diskIo.write);
+  document.getElementById('dDiskIoSpark').innerHTML = dualSparkline(data.history.diskIo.read, data.history.diskIo.write, 'Чтение и запись диска');
 
   // Кольца перерисовываем целиком (внутри .dash-row первый элемент).
   const rows = document.querySelectorAll('#dashRoot .dash-row');

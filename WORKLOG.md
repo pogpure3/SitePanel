@@ -8,6 +8,155 @@
 
 ---
 
+## 2026-10-26 — Публикация виджета дисковой активности на panel_beget
+
+**Запрос.** Опубликовать на `panel_beget` отдельный виджет чтения/записи
+диска, ранее опубликованный на `panel_test`.
+**Диагностика.** Хост `yyxrrbytkl`, `sitepanel` и `nginx` были active.
+Хеши пяти целевых файлов совпадали с предыдущей версией графиков диска и
+сети, без нового виджета I/O.
+**Изменения.** Создан архив
+`/root/sitepanel-disk-io-before-20261026-150437.tar.gz`
+(`8736b33e3af61b9cf784ef21ea68ebf7a02e0b85e589cb426bfd8fb33cdc7880`).
+Обновлены `/opt/sitepanel/src/dashboard.js`,
+`/opt/sitepanel/src/admin/public/views-dashboard.js`,
+`/opt/sitepanel/src/admin/public/style.css`,
+`/opt/sitepanel/tests/stage4-observability.test.js` и
+`/opt/sitepanel/tests/ui-browser.test.js`. Выполнен `systemctl restart sitepanel`;
+временные файлы из `/tmp/sitepanel-disk-io-upload` удалены.
+**Проверка.** SHA-256 пяти опубликованных файлов совпал с локальным;
+`node --check` прошёл. Серверный прогон
+`node --test tests/stage4-observability.test.js tests/ui-browser.test.js`: 9 pass,
+2 browser-skip, 0 fail. Живой замер: `vda1`, чтение 22052 Б/с, запись
+305464 Б/с, по одной точке в обеих историях. `sitepanel` и `nginx` active,
+failed units нет; `https://beget.evil-mesh.ru/` без авторизации вернул
+ожидаемый HTTP 401.
+**Осталось.** Серверный Playwright не установлен, поэтому авторизованный
+production-экран в браузере на стенде не открывался; тот же код прошёл локальный
+Playwright-тест.
+
+## 2026-10-26 — Отдельный виджет чтения/записи диска на panel_test
+
+**Запрос.** Вынести динамику чтения и записи диска в отдельный виджет и
+опубликовать его на `panel_test`.
+**Диагностика.** Карточка хранилища в
+`D:\Projects\SitePanel\src\admin\public\views-dashboard.js` показывала занятое
+место, но не скорости I/O. `D:\Projects\SitePanel\src\dashboard.js` не читал
+`/proc/diskstats` и не определял блочное устройство файловой системы `dataDir`.
+**Изменения.** `D:\Projects\SitePanel\src\dashboard.js` выбирает самый
+глубокий mount для `dataDir` из `/proc/self/mountinfo`, читает его счётчики из
+`/proc/diskstats`, рассчитывает Б/с и хранит 60 точек чтения/записи.
+`D:\Projects\SitePanel\src\admin\public\views-dashboard.js` получил отдельную
+карточку «Дисковая активность» с текущими скоростями и общим SVG-графиком.
+Общие стили скоростей обновлены в `D:\Projects\SitePanel\src\admin\public\style.css`;
+регрессии — в `D:\Projects\SitePanel\tests\stage4-observability.test.js` и
+`D:\Projects\SitePanel\tests\ui-browser.test.js`.
+
+На `panel_test` создан архив
+`/root/sitepanel-disk-io-before-20261026-145519.tar.gz`
+(`2b493e500bc020b443b853be6ae6512770cc842becc6438732b0da6372e9e2ed`).
+Обновлены `/opt/sitepanel/src/dashboard.js`,
+`/opt/sitepanel/src/admin/public/views-dashboard.js`,
+`/opt/sitepanel/src/admin/public/style.css`,
+`/opt/sitepanel/tests/stage4-observability.test.js` и
+`/opt/sitepanel/tests/ui-browser.test.js`; выполнен `systemctl restart sitepanel`.
+**Проверка.** Локально `node --check` и `npm run lint` завершились без
+ошибок. Точечный прогон `node --test tests/stage4-observability.test.js
+tests/integration.test.js tests/ui-browser.test.js`: 18 pass, 2 skip, 0 fail; Playwright
+подтвердил наличие виджета и его значений. На `panel_test` SHA-256 пяти файлов
+совпал с локальным; серверные тесты: 9 pass, 2 browser-skip, 0 fail.
+Живой замер вернул `sda1`, чтение 0 Б/с, запись 1634 Б/с и по одной
+точке в обеих историях. `sitepanel` и `nginx` active, failed units нет;
+`https://panel.evil-mesh.ru/` без авторизации вернул ожидаемый HTTP 401.
+**Осталось.** Серверный Playwright не установлен, поэтому авторизованный
+экран `panel_test` на самом стенде в браузере не открывался. `panel_beget`
+остался на прежней версии без нового виджета.
+
+## 2026-10-26 — Публикация графиков диска и сети на panel_beget
+
+**Запрос.** Опубликовать новые виджеты дашборда на продакт-стенде
+`panel_beget`.
+**Диагностика.** Фактическое имя хоста — `yyxrrbytkl`; `sitepanel` и `nginx`
+были active. Хеши `/opt/sitepanel/src/dashboard.js`,
+`/opt/sitepanel/src/admin/public/views-dashboard.js` и
+`/opt/sitepanel/src/admin/public/style.css` совпадали с прежними версиями
+до публикации виджетов.
+**Изменения.** Создан архив отката
+`/root/sitepanel-dashboard-before-20261026-144923.tar.gz`
+(`387bf0f87bad0905228474f332b35b5b8b71bbdc8023c3ea0c19e4ca61880f80`).
+Обновлены `/opt/sitepanel/src/dashboard.js`,
+`/opt/sitepanel/src/admin/public/views-dashboard.js`,
+`/opt/sitepanel/src/admin/public/style.css`,
+`/opt/sitepanel/tests/stage4-observability.test.js` и
+`/opt/sitepanel/tests/ui-browser.test.js`. Выполнен `systemctl restart sitepanel`;
+временные файлы из `/tmp/sitepanel-dashboard-upload` удалены.
+**Проверка.** SHA-256 всех пяти опубликованных файлов совпал с
+локальным; `node --check` прошёл для runtime JS. Серверный прогон
+`node --test tests/stage4-observability.test.js tests/ui-browser.test.js`: 8 pass,
+2 skip, 0 fail; браузерные тесты пропущены из-за отсутствия Playwright.
+Живой замер: диск 34%, `eth0`, RX 1094 Б/с, TX 4095 Б/с, по одной точке в
+историях диска/RX/TX. `sitepanel` и `nginx` после перезапуска active,
+failed units нет; `https://beget.evil-mesh.ru/` без авторизации вернул
+ожидаемый HTTP 401.
+**Осталось.** Авторизованный production-интерфейс в браузере не
+открывался; тот же код виджетов прошёл локальный Playwright-тест.
+
+## 2026-10-26 — Публикация графиков диска и сети на panel_test
+
+**Запрос.** Опубликовать на тестовом стенде `panel_test` новые виджеты
+дашборда.
+**Диагностика.** Хост `r1114848` и сервисы `sitepanel`/`nginx` были
+active. На стенде присутствовали прежние версии
+`/opt/sitepanel/src/dashboard.js`,
+`/opt/sitepanel/src/admin/public/views-dashboard.js` и
+`/opt/sitepanel/src/admin/public/style.css`.
+**Изменения.** Создан архив отката
+`/root/sitepanel-dashboard-before-20261026-143740.tar.gz`
+(`21c3354038c585450bef0acce0e753e4d1062cc6c600224df5c55e68621e55aa`).
+Обновлены `/opt/sitepanel/src/dashboard.js`,
+`/opt/sitepanel/src/admin/public/views-dashboard.js`,
+`/opt/sitepanel/src/admin/public/style.css`,
+`/opt/sitepanel/tests/stage4-observability.test.js` и
+`/opt/sitepanel/tests/ui-browser.test.js`. Выполнен `systemctl restart sitepanel`;
+временные файлы загрузки из `/tmp/sitepanel-dashboard-upload` удалены.
+**Проверка.** SHA-256 всех пяти опубликованных файлов совпал с
+локальным. `node --check` прошёл для обоих JS-файлов исполнения.
+Серверный прогон `node --test tests/stage4-observability.test.js tests/ui-browser.test.js`:
+8 pass, 2 skip, 0 fail; браузерные тесты пропущены из-за отсутствия
+Playwright. Живой замер вернул диск 75%, `eth0`, RX 3433 Б/с, TX 0 Б/с и
+по одной точке в каждой истории. `sitepanel` и `nginx` после перезапуска
+active, failed units нет; `https://panel.evil-mesh.ru/` без авторизации
+вернул ожидаемый HTTP 401.
+**Осталось.** Авторизованный интерфейс `panel_test` в браузере не
+открывался; тот же код виджетов прошёл локальный Playwright-тест.
+
+## 2026-10-26 — Графики диска и сети на дашборде
+
+**Запрос.** Добавить на дашборд SitePanel виджеты использования диска и
+нагрузки на сеть в виде графиков.
+**Диагностика.** В `D:\Projects\SitePanel\src\dashboard.js` уже собирались
+мгновенные данные диска, но без истории. Сетевые счётчики не
+собирались. `D:\Projects\SitePanel\src\admin\public\views-dashboard.js`
+рисовал CPU и память собственным SVG-спарклайном, поэтому новая
+зависимость не потребовалась.
+**Изменения.** `D:\Projects\SitePanel\src\dashboard.js` хранит до 60 точек
+диска и скоростей RX/TX с интервалом 5 с. Для Linux счётчики читаются из
+`/proc/net/dev` по интерфейсу маршрута по умолчанию из `/proc/net/route`.
+`D:\Projects\SitePanel\src\admin\public\views-dashboard.js` и
+`D:\Projects\SitePanel\src\admin\public\style.css` добавляют график диска и
+сетевой виджет с общим масштабом RX/TX. Регрессии добавлены в
+`D:\Projects\SitePanel\tests\stage4-observability.test.js` и
+`D:\Projects\SitePanel\tests\ui-browser.test.js`.
+**Проверка.** `npm run lint` завершился без ошибок. Точечный прогон
+`node --test tests/stage4-observability.test.js tests/integration.test.js tests/ui-browser.test.js`:
+17 pass, 2 skip, 0 fail. Полный `npm test`: 211 pass, 21 skip, 3 прежних
+Windows-сбоя `T-32/T-43/T-44` (`ECONNRESET`, освобождение порта, удаление
+временного каталога). Браузерный тест подтвердил наличие обоих
+графиков и скоростей приёма/передачи.
+**Осталось.** На Windows `/proc` нет, поэтому сетевой виджет показывает
+`недоступно`; на целевом Linux-стенде будут реальные RX/TX. Изменения на стенд
+не публиковались.
+
 ## 2026-10-26 — Единый визуальный стиль проектов на panel_beget
 
 **Запрос.** Обновить production-стенд `panel_beget` после унификации визуального

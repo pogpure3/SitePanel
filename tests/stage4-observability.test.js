@@ -23,6 +23,27 @@ const { startPanel, api, makeZip, sleep } = require('./helpers/panel');
 
 const isPosix = process.platform !== 'win32';
 
+test('dashboard: сетевые счётчики берутся с нужного интерфейса', () => {
+  const { parseNetworkStats } = require('../src/dashboard');
+  const raw = `Inter-|   Receive                                                |  Transmit
+ face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed
+    lo: 100 1 0 0 0 0 0 0 100 1 0 0 0 0 0 0
+  eth0: 2048 2 0 0 0 0 0 0 1024 1 0 0 0 0 0 0
+docker0: 4096 4 0 0 0 0 0 0 3072 3 0 0 0 0 0 0`;
+  assert.deepEqual(parseNetworkStats(raw, 'eth0'), { interface: 'eth0', rx: 2048, tx: 1024 });
+  assert.deepEqual(parseNetworkStats(raw, 'missing'), null);
+});
+
+test('dashboard: дисковые счётчики берутся с файловой системы dataDir', () => {
+  const { findMountDevice, parseDiskStats } = require('../src/dashboard');
+  const mountinfo = `24 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw
+25 24 8:2 / /opt/sitepanel/data rw,relatime - ext4 /dev/sda2 rw`;
+  assert.deepEqual(findMountDevice(mountinfo, '/opt/sitepanel/data/sites/a'), { major: 8, minor: 2, mountpoint: '/opt/sitepanel/data' });
+  const diskstats = '8 2 sda2 10 0 20 0 30 0 40 0 0 0 0 0 0 0';
+  assert.deepEqual(parseDiskStats(diskstats, 8, 2), { device: 'sda2', readBytes: 10240, writeBytes: 20480 });
+  assert.equal(parseDiskStats(diskstats, 8, 3), null);
+});
+
 /* ---------- M-02: телеметрия не попадает в db.json ---------- */
 
 test('M-02: тик монитора пишет health в память, но не в db.json', async (t) => {
