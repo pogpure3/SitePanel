@@ -391,6 +391,7 @@ function viewToHash(v) {
   if (v.name === 'settings') return '#/settings';
   if (v.name === 'list') return '#/sites';
   if (v.name === 'terminal') return '#/terminal';
+  if (v.name === 'runtimes') return '#/runtimes';
   if (v.name === 'users') return '#/users';
   return '#/';
 }
@@ -406,6 +407,7 @@ function viewFromHash() {
   if (h === '#/settings') return { name: 'settings' };
   if (h === '#/sites') return { name: 'list' };
   if (h === '#/terminal') return { name: 'terminal' };
+  if (h === '#/runtimes') return { name: 'runtimes' };
   if (h === '#/users') return { name: 'users' };
   return { name: 'dashboard' };
 }
@@ -434,6 +436,7 @@ const CRUMBS = {
   files: 'Файлы',
   backups: 'Бэкапы',
   terminal: 'Терминал',
+  runtimes: 'Ресурсы',
   users: 'Пользователи',
   settings: 'Настройки',
 };
@@ -524,6 +527,8 @@ async function render() {
       renderSettings(settings, system);
     } else if (v.name === 'terminal') {
       renderTerminal();
+    } else if (v.name === 'runtimes') {
+      await renderRuntimes();
     } else if (v.name === 'users') {
       await renderUsers();
     }
@@ -551,6 +556,7 @@ document.getElementById('brandBtn').addEventListener('click', () => navigate({ n
 document.getElementById('listBtn').addEventListener('click', () => navigate({ name: 'list' }));
 document.getElementById('dashBtn').addEventListener('click', () => navigate({ name: 'dashboard' }));
 document.getElementById('terminalBtn').addEventListener('click', () => navigate({ name: 'terminal' }));
+document.getElementById('runtimesBtn').addEventListener('click', () => navigate({ name: 'runtimes' }));
 document.getElementById('usersBtn').addEventListener('click', () => navigate({ name: 'users' }));
 document.getElementById('settingsBtn').addEventListener('click', () => navigate({ name: 'settings' }));
 const themeToggle = document.getElementById('themeSelect');

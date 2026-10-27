@@ -19,6 +19,7 @@ const monitor = require('../monitor');
 const dashboard = require('../dashboard');
 const alerts = require('../alerts');
 const terminal = require('./terminal');
+const runtimes = require('./runtimes');
 
 const router = express.Router();
 router.use(auth.middleware);
@@ -762,6 +763,19 @@ router.get('/sites/:id/backups/:name/download', wrap(async (req, res) => {
 router.delete('/sites/:id/backups/:name', wrap(async (req, res) => {
   const site = findSite(req);
   const r = await backups.deleteBackup(site, req.params.name);
+  res.json(r);
+}));
+
+/* ---------- Ресурсы сервера (node/php/docker/next) ---------- */
+
+router.get('/runtimes', wrap(async (_req, res) => {
+  const list = await runtimes.listRuntimes();
+  res.json({ runtimes: list });
+}));
+
+// Установка/обновление без версии ставит кандидата (apt) или latest (npm).
+router.post('/runtimes/:id/install', wrap(async (req, res) => {
+  const r = await runtimes.installRuntime(req.params.id, req.body && req.body.version);
   res.json(r);
 }));
 
