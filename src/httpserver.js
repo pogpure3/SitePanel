@@ -25,6 +25,7 @@ const PORTAL_FRAME_ORIGINS = new Map([
   ['p.evil-mesh.ru', 'https://portal.evil-mesh.ru'],
   ['pfapi.evil-mesh.ru', 'https://portal.evil-mesh.ru'],
   ['m.evil-mesh.ru', 'https://portal.evil-mesh.ru'],
+  ['balancer.evil-mesh.ru', 'https://portal.evil-mesh.ru'],
 ]);
 
 // Таймаут обязателен: без него зависший апстрим (приложение сайта приняло
@@ -177,6 +178,7 @@ function isBlockedPath(urlPath) {
 function serveStatic(site, req, res) {
   // Тот же диагностический заголовок, что у node-сайтов (H-10).
   res.setHeader('X-Sitepanel-Site', site.id);
+  if (site.noindex) res.setHeader('X-Robots-Tag', 'noindex, nofollow');
   const root = manager.siteDir(site);
   let urlPath;
   try {
@@ -422,6 +424,9 @@ async function stripPanelAuthorization(req) {
 
 function proxyToNode(site, req, res, host) {
   res.setHeader('X-Sitepanel-Site', site.id);
+  // Закрытие от индексации: заголовок понимают все поисковики и он действует
+  // на любые типы ответов (в отличие от meta-тега, который только в HTML).
+  if (site.noindex) res.setHeader('X-Robots-Tag', 'noindex, nofollow');
   const port = Number(site.port);
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     // Порт не выделен/потерян (битый db.json): прокси на `null` не отдаёт ни

@@ -83,9 +83,11 @@ function renderSite(site) {
             <dt>Аптайм процесса</dt><dd id="dUptime">—</dd>
             <dt>Обновлён</dt><dd id="dUpdated"></dd>
             <dt>Создан</dt><dd id="dCreated"></dd>
+            <dt>Индексация</dt><dd id="dNoindex">—</dd>
             <dt>Git</dt><dd id="dGit">—</dd>
           </dl>
           <label class="checkbox" style="margin-top:10px"><input type="checkbox" id="autoStartBox"> Запускать автоматически при старте панели</label>
+          <label class="checkbox"><input type="checkbox" id="noindexBox"> Закрыть домены от индексации (X-Robots-Tag)</label>
           <div class="warn hidden" id="dWarn"></div>
           <div class="actions-row">
             <button class="btn btn-sm btn-success act-start">▶ Запустить</button>
@@ -218,6 +220,18 @@ function renderSite(site) {
       toast(err.message, 'error');
     }
   };
+  const noindexBox = document.getElementById('noindexBox');
+  noindexBox.checked = !!site.noindex;
+  noindexBox.addEventListener('change', async () => {
+    try {
+      await api('PATCH', `/api/sites/${siteId}`, { noindex: noindexBox.checked });
+      toast(noindexBox.checked ? 'Домены закрыты от индексации' : 'Индексация разрешена', 'success');
+    } catch (err) {
+      toast(err.message, 'error');
+      noindexBox.checked = !!site.noindex;
+    }
+  });
+
   const autoStartBox = document.getElementById('autoStartBox');
   autoStartBox.checked = !!site.autoStart;
   autoStartBox.addEventListener('change', async () => {
@@ -378,6 +392,9 @@ function patchDetail(site) {
   document.getElementById('dUptime').textContent = site.stats ? fmtUptime(site.stats.uptimeSec) : '—';
   document.getElementById('dUpdated').textContent = fmtDate(site.updatedAt);
   document.getElementById('dCreated').textContent = fmtDate(site.createdAt);
+  document.getElementById('dNoindex').innerHTML = site.noindex
+    ? '<span class="badge loop-bad" title="Ответы сайта отдаются с X-Robots-Tag: noindex, nofollow">🔒 закрыта</span>'
+    : '<span class="badge ssl-ok" title="Поисковики могут индексировать домены сайта">открыта</span>';
   document.getElementById('dGit').innerHTML = site.gitUrl
     ? `${esc(site.gitUrl)}${site.gitBranch ? ' · ' + esc(site.gitBranch) : ''}`
     : '—';

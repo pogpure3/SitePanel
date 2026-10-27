@@ -103,6 +103,7 @@ function validateSite(raw) {
   }
 
   if (typeof site.autoStart !== 'boolean') site.autoStart = false;
+  if (typeof site.noindex !== 'boolean') site.noindex = false;
   if (typeof site.status !== 'string') site.status = 'stopped';
 
   // Docker-сайт: containerPort — порт приложения ВНУТРИ контейнера (панель

@@ -122,6 +122,7 @@ function serializeSite(site, withStats = true) {
     domains: site.domains,
     port: site.port,
     autoStart: !!site.autoStart,
+    noindex: !!site.noindex,
     hasBackup: !!site.hasBackup,
     gitUrl: site.gitUrl || null,
     gitBranch: site.gitBranch || null,
@@ -307,6 +308,7 @@ router.patch('/sites/:id', wrap(async (req, res) => {
   const site = findSite(req);
   if (req.body.name) site.name = slugify(req.body.name);
   if (req.body.autoStart !== undefined) site.autoStart = !!req.body.autoStart;
+  if (req.body.noindex !== undefined) site.noindex = !!req.body.noindex;
   // containerPort: порт приложения внутри контейнера docker-сайта. null —
   // заново детектировать из EXPOSE/ports при следующем деплое.
   let portApplied = null;
