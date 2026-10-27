@@ -16,8 +16,8 @@ function sparkline(points, color, max) {
   const line = pts.map((p, i) => `${PAD + i * step},${y(p.v).toFixed(1)}`).join(' ');
   const area = `${PAD},${H - PAD} ${line} ${PAD + (pts.length - 1) * step},${H - PAD}`;
   return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="spark">
-    <polygon points="${area}" fill="${color}" opacity="0.12"/>
-    <polyline points="${line}" fill="none" stroke="${color}" stroke-width="1.8" stroke-linejoin="round"/>
+    <polygon points="${area}" style="fill:${color}" opacity="0.12"/>
+    <polyline points="${line}" fill="none" style="stroke:${color}" stroke-width="1.8" stroke-linejoin="round"/>
   </svg>`;
 }
 
@@ -33,8 +33,8 @@ function dualSparkline(firstPoints, secondPoints, ariaLabel) {
     return points.map((point, i) => `${PAD + i * step},${(H - PAD - point.v / top * (H - PAD * 2)).toFixed(1)}`).join(' ');
   };
   return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="spark" role="img" aria-label="${ariaLabel}">
-    <polyline points="${line(first)}" fill="none" stroke="#34d399" stroke-width="1.8" stroke-linejoin="round"/>
-    <polyline points="${line(second)}" fill="none" stroke="#fbbf24" stroke-width="1.8" stroke-linejoin="round"/>
+    <polyline points="${line(first)}" fill="none" style="stroke:var(--chart-rx)" stroke-width="1.8" stroke-linejoin="round"/>
+    <polyline points="${line(second)}" fill="none" style="stroke:var(--chart-tx)" stroke-width="1.8" stroke-linejoin="round"/>
   </svg>`;
 }
 
@@ -46,8 +46,8 @@ function ring(pct, color) {
   const R = 26, C = 2 * Math.PI * R;
   const off = C * (1 - Math.min(100, Math.max(0, pct || 0)) / 100);
   return `<svg viewBox="0 0 64 64" class="ring">
-    <circle cx="32" cy="32" r="${R}" fill="none" stroke="var(--border)" stroke-width="6"/>
-    <circle cx="32" cy="32" r="${R}" fill="none" stroke="${color}" stroke-width="6"
+    <circle cx="32" cy="32" r="${R}" fill="none" style="stroke:var(--border)" stroke-width="6"/>
+    <circle cx="32" cy="32" r="${R}" fill="none" style="stroke:${color}" stroke-width="6"
       stroke-linecap="round" stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}"
       transform="rotate(-90 32 32)"/>
     <text x="32" y="37" text-anchor="middle" class="ring-text">${pct === null || pct === undefined ? '—' : pct + '%'}</text>
@@ -63,25 +63,28 @@ function renderDashboard(data) {
       <div class="dash-grid">
         <div class="panel dash-card">
           <h2>Процессор</h2>
-          <div class="dash-row">${ring(data.cpu.pct, '#60a5fa')}
+          <div class="dash-row">${ring(data.cpu.pct, 'var(--chart-cpu)')}
             <div class="dash-facts">
               <div class="dash-big" id="dCpuPct">${data.cpu.pct === null ? '—' : data.cpu.pct + '%'}</div>
-              <div class="hint">${data.cpu.cores} ядер${data.cpu.model ? ' · ' + esc(String(data.cpu.model).slice(0, 40)) : ''}</div>
               <div class="hint">load average: ${data.cpu.loadavg.join(' / ') || '—'}</div>
             </div>
           </div>
-          <div id="dCpuSpark">${sparkline(data.history.cpu, '#60a5fa')}</div>
+          <!-- Модель — отдельной строкой под рядом, как detail у «Хранилища»:
+               иначе текстовый блок CPU выше, чем у «Памяти», и кольцо смещается вниз.
+               Строка одна (эллипсис), чтобы высота карточки не прыгала. -->
+          <div class="hint dash-model" style="margin-top:8px" title="${esc(String(data.cpu.model || ''))}">${data.cpu.cores} ядер${data.cpu.model ? ' · ' + esc(String(data.cpu.model).slice(0, 40)) : ''}</div>
+          <div id="dCpuSpark">${sparkline(data.history.cpu, 'var(--chart-cpu)')}</div>
         </div>
 
         <div class="panel dash-card">
           <h2>Память</h2>
-          <div class="dash-row">${ring(data.mem.pct, '#a78bfa')}
+          <div class="dash-row">${ring(data.mem.pct, 'var(--chart-mem)')}
             <div class="dash-facts">
               <div class="dash-big" id="dMemPct">${data.mem.pct === null ? '—' : data.mem.pct + '%'}</div>
               <div class="hint" id="dMemDetail">${fmtBytes(data.mem.used)} из ${fmtBytes(data.mem.total)}</div>
             </div>
           </div>
-          <div id="dMemSpark">${sparkline(data.history.mem, '#a78bfa', 100)}</div>
+          <div id="dMemSpark">${sparkline(data.history.mem, 'var(--chart-mem)', 100)}</div>
         </div>
 
         <div class="panel dash-card">
@@ -89,7 +92,7 @@ function renderDashboard(data) {
           <div class="dash-row" id="dDiskRing"></div>
           <div class="hint" id="dDiskDetail" style="margin-top:6px"></div>
           <div class="disk-bar"><div class="disk-bar-fill" id="dDiskBar"></div></div>
-          <div id="dDiskSpark">${sparkline(data.history.disk, '#34d399', 100)}</div>
+          <div id="dDiskSpark">${sparkline(data.history.disk, 'var(--chart-disk)', 100)}</div>
         </div>
 
         <div class="panel dash-card">
@@ -129,9 +132,9 @@ function patchDashboard(data) {
   document.getElementById('dCpuPct').textContent = data.cpu.pct === null ? '—' : data.cpu.pct + '%';
   document.getElementById('dMemPct').textContent = data.mem.pct === null ? '—' : data.mem.pct + '%';
   document.getElementById('dMemDetail').textContent = `${fmtBytes(data.mem.used)} из ${fmtBytes(data.mem.total)}`;
-  document.getElementById('dCpuSpark').innerHTML = sparkline(data.history.cpu, '#60a5fa');
-  document.getElementById('dMemSpark').innerHTML = sparkline(data.history.mem, '#a78bfa', 100);
-  document.getElementById('dDiskSpark').innerHTML = sparkline(data.history.disk, '#34d399', 100);
+  document.getElementById('dCpuSpark').innerHTML = sparkline(data.history.cpu, 'var(--chart-cpu)');
+  document.getElementById('dMemSpark').innerHTML = sparkline(data.history.mem, 'var(--chart-mem)', 100);
+  document.getElementById('dDiskSpark').innerHTML = sparkline(data.history.disk, 'var(--chart-disk)', 100);
   document.getElementById('dNetworkInterface').textContent = data.network ? data.network.interface : 'недоступно';
   document.getElementById('dNetworkRx').textContent = fmtRate(data.network && data.network.rx);
   document.getElementById('dNetworkTx').textContent = fmtRate(data.network && data.network.tx);
@@ -143,16 +146,16 @@ function patchDashboard(data) {
 
   // Кольца перерисовываем целиком (внутри .dash-row первый элемент).
   const rows = document.querySelectorAll('#dashRoot .dash-row');
-  rows[0].querySelector('.ring').outerHTML = ring(data.cpu.pct, '#60a5fa');
-  rows[1].querySelector('.ring').outerHTML = ring(data.mem.pct, '#a78bfa');
+  rows[0].querySelector('.ring').outerHTML = ring(data.cpu.pct, 'var(--chart-cpu)');
+  rows[1].querySelector('.ring').outerHTML = ring(data.mem.pct, 'var(--chart-mem)');
 
   if (data.disk) {
     document.getElementById('dDiskPath').textContent = data.disk.path || '';
-    document.getElementById('dDiskRing').innerHTML = ring(data.disk.pct, data.disk.pct > 90 ? '#f87171' : data.disk.pct > 75 ? '#fbbf24' : '#34d399');
+    document.getElementById('dDiskRing').innerHTML = ring(data.disk.pct, data.disk.pct > 90 ? 'var(--chart-crit)' : data.disk.pct > 75 ? 'var(--chart-warn)' : 'var(--chart-disk)');
     document.getElementById('dDiskDetail').textContent = `${fmtBytes(data.disk.used)} занято из ${fmtBytes(data.disk.total)}`;
     const bar = document.getElementById('dDiskBar');
     bar.style.width = Math.min(100, data.disk.pct || 0) + '%';
-    bar.style.background = data.disk.pct > 90 ? '#f87171' : data.disk.pct > 75 ? '#fbbf24' : '#34d399';
+    bar.style.background = data.disk.pct > 90 ? 'var(--chart-crit)' : data.disk.pct > 75 ? 'var(--chart-warn)' : 'var(--chart-disk)';
   } else {
     document.getElementById('dDiskRing').innerHTML = '<p class="hint">Размер диска определить не удалось</p>';
   }
