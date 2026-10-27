@@ -94,6 +94,39 @@ HTTP-заголовок для каждого обслуживаемого от�
 `https://balancer.evil-mesh.ru/` возвращает 200.
 **Осталось.** Тестовый стенд не обновлялся по условию задачи.
 
+## 2026-10-27 — Репозиторий Docker подключён на panel_beget
+
+**Запрос.** «Подключи репо докера» — чтобы вкладка «Ресурсы» на проде могла
+установить Docker (на beget его нет, apt-пакета тоже не было).
+
+**Диагностика.** beget — Ubuntu **26.04 (Resolute Raccoon)**, x86_64; в
+`/etc/apt/sources.list.d/` только beget-packages и ubuntu; `apt-cache policy
+docker-ce` — «Candidate: (none)». В репозитории Docker дистрибутив `resolute`
+присутствует (`.../dists/resolute/Release` → 200), поэтому отдельный fallback
+на `noble` не нужен.
+
+**Изменения — panel_beget.** Официальный ключ Docker:
+`/etc/apt/keyrings/docker.asc` (`curl` с download.docker.com, `chmod a+r`);
+источник `/etc/apt/sources.list.d/docker.list`:
+`deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu resolute stable`.
+Существовавшие источники не менялись (бэкап docker.list делался на случай
+перезаписи — файла не было). `apt-get update` — без ошибок.
+
+**Проверка.**
+- `apt-cache policy docker-ce` → **Candidate: 5:29.9.2-1~ubuntu.26.04~resolute**
+  (22 версии в таблице).
+- `runtimes.listRuntimes()` на beget: docker — «не установлен», доступно
+  22 версии (29.9.2, 29.9.1, …); рядом nodejs 22.22.1, php (1 мета-версия),
+  nextjs (30 релизов npm) — без изменений.
+- Прод не затронут: `beget.evil-mesh.ru/login` 200, `/healthz` ok, `pg` 200,
+  `p` 200, `m` 401; `systemctl is-active sitepanel` — active. Docker НЕ
+  устанавливался (по запросу подключён только репозиторий).
+
+**Осталось.** Установка Docker на beget — кнопкой в «Ресурсах» (или
+`apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin
+docker-compose-plugin`), после чего станут доступны Docker-сайты; это меняет
+состояние прода (новый демон, свои iptables-цепочки) — по решению владельца.
+
 ## 2026-10-27 — Полная выкладка на panel_beget (ресурсы, noindex, распил фронтенда)
 
 **Запрос.** «Обнови на бегет панели» — первая полная выкладка после серии

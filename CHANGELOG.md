@@ -54,6 +54,13 @@
 
 ### Инфраструктура стенда
 
+**panel_beget: подключён apt-репозиторий Docker** (2026-10-27). Ubuntu 26.04
+(resolute): ключ `/etc/apt/keyrings/docker.asc`, источник
+`/etc/apt/sources.list.d/docker.list` (download.docker.com, `resolute stable`).
+`apt-cache policy docker-ce` → кандидат 5:29.9.2; панель видит 22 версии
+Docker во вкладке «Ресурсы». Сам Docker не устанавливался — прод не менял
+состав сервисов; сайты pg/p/m и админка не затронуты.
+
 - На `panel_test`, `panel_beget`, `r.evil-mesh.ru` и сервере `pfdesk.evil-mesh.ru` ответы
   домена `evil-mesh.ru` и его поддоменов закрыты от поисковой индексации
   заголовком `X-Robots-Tag: noindex, nofollow, noarchive, nosnippet`.
