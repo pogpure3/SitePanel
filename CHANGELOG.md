@@ -57,6 +57,16 @@
 
 ### Инфраструктура стенда
 
+**panel_test: оставлена только панель** (2026-10-27). Обнаружено, что реестр
+сайтов пуст (`db.json` — 0 сайтов), каталоги pqr и api-progression удалены,
+от mesh-portal и proxy-balancer остались `.broken`. По решению владельца сайты
+не восстанавливались: удалены осиротевшие каталоги `.broken`, все контейнеры и
+образы Docker (13/18). Панель работает (`/healthz`, `/login` 200, API без
+пароля 401). Снимок аварийного состояния:
+`/root/incident-panel_test-20261027-204736.tar.gz`; источники восстановления —
+`/root/sitepanel-backups/20261027-043001/`, `apiprog-site-backup-20261023-130801.tar.gz`,
+`pqr-deploy.zip`. Beget не затронут.
+
 **panel_beget: подключён apt-репозиторий Docker** (2026-10-27). Ubuntu 26.04
 (resolute): ключ `/etc/apt/keyrings/docker.asc`, источник
 `/etc/apt/sources.list.d/docker.list` (download.docker.com, `resolute stable`).
