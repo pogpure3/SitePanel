@@ -8,6 +8,49 @@
 
 ---
 
+## 2026-10-28 — Чистка хвостов pqr/apitest/prtl/testproxy на panel_test
+
+**Запрос.** «pqr-panel/apitest домены удалены, почисти хвосты» — после
+инцидента 2026-10-27 оставались включённые nginx-вхосты и сертификаты
+certbot от давно удалённых сайтов.
+
+**Диагностика.** DNS (Resolve-DnsName, 2026-10-28): у `pqr.evil-mesh.ru`,
+`apitest.evil-mesh.ru`, `prtl.evil-mesh.ru` и `testproxy.evil-mesh.ru`
+A-записей нет — домены сняты владельцем. В nginx: включённые вхосты
+`sites-enabled/pqr-panel` и `sites-enabled/apitest`; файлы вхостов и
+устаревшие копии в `sites-available`: `pqr-panel`, `apitest`, `prtl`,
+`testproxy`, `apitest.bak.20261020-120652`, `prtl.bak.20261024-200500`,
+`testproxy.bak.20261027-145100`. В `/etc/letsencrypt` — сертификаты
+`pqr.evil-mesh.ru` и `apitest.evil-mesh.ru` (live/archive/renewal, webroot).
+В реестре панели этих сайтов нет с инцидента — в панели чистить нечего.
+
+**Изменения.** Все на panel_test. Бэкап ДО:
+**`/root/nginx-letsencrypt-backup-20261028-124811.tar.gz`**
+(`/etc/nginx/sites-available` + `sites-enabled` + `/etc/letsencrypt`).
+
+- Удалены симлинки `/etc/nginx/sites-enabled/pqr-panel` и
+  `/etc/nginx/sites-enabled/apitest`.
+- Удалены файлы `/etc/nginx/sites-available/{pqr-panel,apitest,prtl,testproxy}`
+  и устаревшие копии `{apitest.bak.20261020-120652, prtl.bak.20261024-200500,
+  testproxy.bak.20261027-145100}`.
+- Сертификаты: `certbot delete --cert-name pqr.evil-mesh.ru -n` и
+  `certbot delete --cert-name apitest.evil-mesh.ru -n` → «Deleted all files
+  relating to certificate …» (live/archive/renewal). В
+  `/etc/letsencrypt/live` остался только `panel.evil-mesh.ru`.
+- В `sites-enabled` осталось: `000-ssl-reject`, `client`, `default`,
+  `sitepanel-acme`, `sitepanel-admin`; в `sites-available` — то же плюс
+  `client.bak.20261028-111700` (бэкап сегодняшнего вхоста).
+
+**Проверка.** `nginx -t` — successful, reload выполнен; grep по `/etc/nginx`
+ссылок на pqr/apitest/prtl/testproxy не находит. Снаружи:
+`https://panel.evil-mesh.ru/login` → 200 (сертификат админки цел),
+`https://client.evil-mesh.ru/` → 200; `pqr.evil-mesh.ru` — DNS не
+резолвится (ожидаемо). `/etc/letsencrypt/renewal/` — только
+`panel.evil-mesh.ru.conf`.
+
+**Осталось.** Хвосты прежнего `rm.evil-mesh.ru` (вхост, `.htpasswd-rm`,
+`/root/.rm-basic-pass`) уже отсутствуют на стенде — проверено `ls`.
+
 ## 2026-10-28 — Сайт `client.evil-mesh.ru` (MeshClient) на panel_test; nginx поднят после инцидента
 
 **Запрос.** «https://github.com/pogpure3/MeshClient установи на панель тест

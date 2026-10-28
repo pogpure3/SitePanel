@@ -65,6 +65,14 @@
 
 ### Инфраструктура стенда
 
+**panel_test: убраны хвосты pqr/apitest/prtl/testproxy** (2026-10-28). Домены
+сняты владельцем; удалены вхосты `pqr-panel` и `apitest` (симлинки и файлы),
+осиротевшие файлы `prtl`, `testproxy` и их устаревшие `.bak`-копии, а также
+сертификаты Let's Encrypt `pqr.evil-mesh.ru` и `apitest.evil-mesh.ru`
+(`certbot delete`). Остались только рабочие вхосты: админка, `client`,
+default, ACME-заглушка и ssl-reject. Бэкап перед чисткой:
+`/root/nginx-letsencrypt-backup-20261028-124811.tar.gz`.
+
 **panel_test: опубликован сайт `client.evil-mesh.ru` (MeshClient)** (2026-10-28).
 Node-ресурс `18f574a2cb69` из приватного репозитория `pogpure3/MeshClient`
 (ветка `main`, деплой корня: панель собирает `npm run build`, CLI сам
