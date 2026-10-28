@@ -8,6 +8,104 @@
 
 ---
 
+## 2026-10-28 — Сайт `client.evil-mesh.ru` (MeshClient) на panel_test; nginx поднят после инцидента
+
+**Запрос.** «https://github.com/pogpure3/MeshClient установи на панель тест
+с доменом client.evil-mesh.ru». В ходе работы пользователь подсказал, где
+лежит пароль админки: «panel.env тут пароль от админки» (файл `panel.env`
+в корне рабочей копии; логин и пароль в журнал не выносятся).
+
+**Диагностика.**
+
+1. **Репозиторий.** `pogpure3/MeshClient` — приватный, единственная ветка
+   `main` (pushed 2026-10-26). Node/TypeScript-приложение: `npm start` =
+   `node dist/cli.js`; при заданном `PORT` без аргументов CLI сам запускает
+   веб-шлюз (`src/cli.ts`:157 «PORT/HOST выставляют панели управления
+   сайтами»), поэтому деплой **корня** репо подходит без подкаталога.
+   `dist/` в репо нет, но панель на деплое выполняет `npm run build` при
+   наличии скрипта (`src/sites/manager.js:986`). Прежняя ветка `mobile`
+   (шлюз meshclient-mobile с `rm.evil-mesh.ru`) из репо удалена. Статика
+   веб-шлюза резолвится от корня проекта (`monitor`/`src/web/server.ts`:
+   237 `path.resolve(__dirname, '..', '..')`).
+2. **DNS.** `client.evil-mesh.ru A 46.29.164.250` — уже указывал на
+   panel_test; правок DNS не требовалось.
+3. **Доступ к API панели.** Вход `POST http://127.0.0.1:3100/api/login`
+   с CSRF-заголовком `X-Requested-With: XMLHttpRequest` и полем `user`
+   (не `username`, `src/admin/login.js:86`) учёткой из `panel.env` — ok.
+   На panel_test это впервые закрыло вопрос «пароля админки нет» из записей
+   2026-10-21.
+4. **Сломанный nginx (найдено при выпуске сертификата).**
+   `nginx -t` падал: в `sites-enabled/` оставались вхосты-сироты `prtl` и
+   `testproxy` от сайтов, удалённых при инциденте 2026-10-27, с
+   `ssl_certificate` на стёртые `/opt/sitepanel/data/certs/68c787d23af8/`
+   и `/opt/sitepanel/data/certs/0300db102939/`. По журналу systemd nginx
+   перезапустился 2026-10-28 06:35 UTC и **не смог стартовать** — юнит
+   `failed`, т.е. вся наружная HTTP/HTTPS-обработка стенда лежала с ~09:35
+   до ~14:17 МСК. Вхосты `pqr-panel`/`apitest` ссылаются на живые
+   `/etc/letsencrypt/live/*` — валидны, не тронуты.
+
+**Изменения.**
+
+- **Сайт заведён штатным API панели** (панель работала, остановки не было):
+  `POST /api/sites/git {"url":"https://github.com/pogpure3/MeshClient.git","name":"client","branch":"main","token":"***","autoStart":false}`
+  → `id 18f574a2cb69`, `type node`, `port 10000`, `startCommand npm start`.
+  Деплой: `npm ci` — 7 пакетов за 2 с, сборка `tsc` — 6 с, 61 файл.
+- **Домен и автозапуск:** `POST /api/sites/18f574a2cb69/domains
+  {"domain":"client.evil-mesh.ru"}` → `{"ok":true}`;
+  `PATCH /api/sites/18f574a2cb69 {"autoStart":true}`.
+- **nginx: убраны сироты-симлинки** `/etc/nginx/sites-enabled/prtl` и
+  `/etc/nginx/sites-enabled/testproxy` — без этого `nginx -t` не проходит
+  и challenge не доходит до панели. Файлы вхостов сохранены в
+  `sites-available/` (testproxy — образец компоновки). Бэкап набора
+  симлинков: **`/root/nginx-enabled-backup-20261028-111635.tar.gz`**.
+  Затем `nginx -t` — successful, `systemctl start nginx` → active.
+- **Вхост `/etc/nginx/sites-available/client`** (+ симлинк в
+  `sites-enabled/client`): блок `listen 80` — `/.well-known/acme-challenge/`
+  → `proxy_pass http://127.0.0.1:8080` с `Host $host`, остальное →
+  `301 https`; блок `listen 443 ssl` — сертификаты
+  `/opt/sitepanel/data/certs/18f574a2cb69/{fullchain,privkey}.pem`,
+  `include /etc/letsencrypt/options-ssl-nginx.conf`, `ssl_dhparam`,
+  `client_max_body_size 20m`, `location /` → `proxy_pass
+  http://127.0.0.1:8080` с заголовками Host, X-Real-IP, X-Forwarded-For,
+  X-Forwarded-Proto, Upgrade/Connection. Копия до добавления 443-блока:
+  **`/etc/nginx/sites-available/client.bak.20261028-111700`**.
+- **Сертификат:** `POST /api/sites/18f574a2cb69/ssl/issue
+  {"domains":["client.evil-mesh.ru"]}` → `{"ok":true}`,
+  `ssl.status=active`, provider letsencrypt, production (`staging:false`),
+  до 2027-01-26. Продление — штатный цикл панели.
+- **Токен GitHub** передавался одноразово файлом `/root/.mc-git-token`
+  (права 600), файл удалён после установки; в `db.json` токен хранится
+  штатно (`gitToken`, наружу API не отдаётся, `src/sites/manager.js:818`).
+
+**Проверка.**
+
+- Внутри стенда: сайт слушает `127.0.0.1:10000` (node), `GET /` → 200,
+  `<title>MeshCentral — Client</title>`; `https://client.evil-mesh.ru/`
+  (--resolve на 127.0.0.1) → 200 с `X-Sitepanel-Site: 18f574a2cb69` и
+  `X-Robots-Tag: noindex…` (conf.d/noindex-evil-mesh.conf); сертификат по
+  SNI: `CN=client.evil-mesh.ru`, issuer `Let's Encrypt YR1`,
+  `notAfter=Jan 26 10:19:13 2027 GMT`.
+- Снаружи (с рабочей машины): `http://client.evil-mesh.ru/` → `301` на
+  https; `https://client.evil-mesh.ru/` → `200`, 28011 байт, заголовок
+  «MeshCentral — Client». В логе сайта: «Web UI: http://127.0.0.1:10000
+  (вход через страницу авторизации)» — вход в MeshCentral задуман через
+  форму (адрес сервера/логин/пароль), `.env` сайту не нужен.
+- Автозапуск: `systemctl restart sitepanel` → панель active,
+  `http://127.0.0.1:10000/` → 200, статус `running`, `autoStart:true`,
+  `ssl.status=active`; `journalctl -u sitepanel -p err` за минуту — пусто.
+
+**Осталось.**
+
+- Включённые вхосты-сироты `pqr-panel` и `apitest` остались: их сертификаты
+  в `/etc/letsencrypt` живы, `nginx -t` не ломают; домены отдают
+  404-заглушку панели. Прибрать или дождаться переустановки сайтов —
+  решение владельца.
+- nginx на panel_test был недоступен снаружи ~09:35–14:17 МСК 2026-10-28
+  (рестарт в 06:35 UTC провалился из-за сирот); последствия интервала
+  (недоставленные уведомления и т.п.) не проверялись.
+- DNS-запись `testproxy.evil-mesh.ru` снята (домен не резолвится);
+  вхост-файл оставлен в `sites-available` как образец.
+
 ## 2026-10-27 — Фиксированная колонка счётчиков ProxyBalancer
 
 **Запрос.** Зарезервировать справа одинаковый блок на 10 цифр для всех
