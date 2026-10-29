@@ -128,8 +128,6 @@ function renderSite(site) {
           <h2>Бэкапы</h2>
           <div id="dBackupInfo"></div>
           <div class="actions-row">
-            <button class="btn btn-sm btn-primary" id="backupScheduleBtn">⚙ Расписание</button>
-            <button class="btn btn-sm act-backup-now">💾 Создать сейчас</button>
             <button class="btn btn-sm" id="backupOpenBtn">📂 Все бэкапы</button>
           </div>
         </div>
@@ -192,14 +190,7 @@ function renderSite(site) {
   });
   act('.act-restart', () => api('POST', `/api/sites/${siteId}/restart`).then(() => toast('Перезапуск...', 'success')));
   act('.act-files', () => { navigate({ name: 'files', id: siteId, path: '' }); });
-  act('.act-backup-now', async () => {
-    toast('Создаём бэкап...');
-    const r = await api('POST', `/api/sites/${siteId}/backups`);
-    toast(`Бэкап создан (${fmtBytes(r.backup && r.backup.sizeBytes)})`, 'success');
-    return r;
-  });
   document.getElementById('backupOpenBtn').onclick = () => navigate({ name: 'backups', id: siteId });
-  document.getElementById('backupScheduleBtn').onclick = () => openBackupSchedule(siteId, site.backupSchedule);
   act('.act-rollback', async () => {
     if (!(await confirmDialog('Откатить версию?', 'Текущая версия будет заменена предыдущей (бэкапом).'))) return undefined;
     const r = await api('POST', `/api/sites/${siteId}/rollback`);
