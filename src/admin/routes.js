@@ -743,16 +743,17 @@ router.put('/sites/:id/backups/schedule', wrap(async (req, res) => {
 // небольших сайтов); таймаут клиента в интерфейсе — 5 минут.
 router.post('/sites/:id/backups', wrap(async (req, res) => {
   const site = findSite(req);
-  const backup = await backups.createBackup(site, 'manual');
+  const backup = await backups.createBackup(site, 'manual', req.body && req.body.scope);
   res.json({ ok: true, backup });
 }));
 
 router.post('/sites/:id/backups/:name/restore', wrap(async (req, res) => {
   const site = findSite(req);
   const zipPath = backups.resolveBackupPath(site, req.params.name);
+  const scope = backups.backupScope(site, req.params.name);
   // restoreBackup сам остановит/поднимет сайт: {ok:false} здесь значит
   // «восстановлено, но сайт не запустился» — интерфейс покажет ошибку.
-  const r = await manager.restoreBackup(site, zipPath);
+  const r = await manager.restoreBackup(site, zipPath, scope);
   res.json(r);
 }));
 

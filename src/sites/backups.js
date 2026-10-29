@@ -1,7 +1,7 @@
 'use strict';
 
-// Плановые бэкапы сайтов (по образцу раздела Backups в ispmanager):
-// полная копия каталога сайта в zip + расписание с ротацией «хранить N».
+// Плановые и ручные бэкапы сайтов (по образцу раздела Backups в ispmanager):
+// полная копия, только файлы сайта или только каталоги данных в zip.
 //
 // Каталог данных: data/backups/<siteId>/<ГГГГММДД-ЧЧММСС>.zip — рядом с каждым
 // архивом <имя>.json с метаданными (триггер, число файлов, несжатый размер,
@@ -27,7 +27,8 @@ const manager = require('./manager');
 const alerts = require('../alerts');
 const { withSiteLock } = require('./lock');
 
-const NAME_RE = /^\d{8}-\d{6}\.zip$/;
+const NAME_RE = /^\d{8}-\d{6}(?:-(?:site|database))?\.zip$/;
+const BACKUP_SCOPES = new Set(['full', 'site', 'database']);
 const DEFAULT_SCHEDULE = { enabled: false, intervalHours: 24, keep: 5, lastRunAt: null, lastError: null };
 
 // siteId с уже запланированным/идущим плановым бэкапом: без этой защиты тик
@@ -44,9 +45,20 @@ function scheduleOf(site) {
 }
 
 /** Имя вида 20261019-031500.zip из текущего времени. */
-function stampName(d = new Date()) {
+function stampName(scope, d = new Date()) {
   const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.zip`;
+  const suffix = scope === 'full' ? '' : `-${scope}`;
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}${suffix}.zip`;
+}
+
+function normalizeScope(scope) {
+  const value = scope === undefined || scope === null || scope === '' ? 'full' : String(scope);
+  if (!BACKUP_SCOPES.has(value)) {
+    const err = new Error('scope: допустимы full, site или database');
+    err.status = 400;
+    throw err;
+  }
+  return value;
 }
 
 function assertBackupName(name) {
@@ -97,7 +109,7 @@ async function freeBytes(dir) {
  * разрастается в разы. Симлинки не упаковываются: в архиве они небезопасны,
  * а extractZip при восстановлении уже умеет их отбрасывать — проще не класть.
  */
-function addDirToZip(archive, absDir, rel, stats, rootDir = absDir) {
+function addDirToZip(archive, absDir, rel, stats, rootDir = absDir, skipPath = null) {
   const maxBytes = config.backupMaxSiteMb * 1048576;
   const root = path.resolve(rootDir);
   for (const d of fs.readdirSync(absDir, { withFileTypes: true })) {
@@ -110,8 +122,9 @@ function addDirToZip(archive, absDir, rel, stats, rootDir = absDir) {
     if (resolved !== root && !resolved.startsWith(root + path.sep)) continue;
     const entryPath = rel ? `${rel}/${d.name}` : d.name;
     if (d.isSymbolicLink()) continue;
+    if (skipPath && skipPath(entryPath)) continue;
     if (d.isDirectory()) {
-      addDirToZip(archive, abs, entryPath, stats, rootDir);
+      addDirToZip(archive, abs, entryPath, stats, rootDir, skipPath);
       continue;
     }
     if (!d.isFile()) continue;
@@ -135,8 +148,9 @@ function addDirToZip(archive, absDir, rel, stats, rootDir = absDir) {
  * блокировали event loop (панель, прокси, health-checks замирали).
  * @param {'manual'|'scheduled'} trigger
  */
-function createBackup(site, trigger) {
-  return serializeBackupRun(() => withSiteLock(site.id, () => _createBackup(site, trigger)));
+function createBackup(site, trigger, scope = 'full') {
+  const normalizedScope = normalizeScope(scope);
+  return serializeBackupRun(() => withSiteLock(site.id, () => _createBackup(site, trigger, normalizedScope)));
 }
 
 // Очередь бэкапов: хвост не «залипает» на ошибке предыдущего запуска.
@@ -147,7 +161,7 @@ function serializeBackupRun(fn) {
   return run;
 }
 
-async function _createBackup(site, trigger) {
+async function _createBackup(site, trigger, scope) {
   const dir = manager.siteDir(site);
   if (!fs.existsSync(dir)) {
     const err = new Error('Каталог сайта не найден');
@@ -166,7 +180,7 @@ async function _createBackup(site, trigger) {
     containerWasRunning = true;
   }
   try {
-    return await packSiteBackup(site, dir, { trigger, t0, name: null });
+    return await packSiteBackup(site, dir, { trigger, t0, scope });
   } finally {
     if (containerWasRunning) {
       try { await manager.startDockerContainers(site); } catch (err) {
@@ -180,8 +194,8 @@ async function _createBackup(site, trigger) {
 }
 
 /** Упаковка каталога сайта в zip (без управления контейнерами). */
-async function packSiteBackup(site, dir, { trigger, t0 }) {
-  const name = stampName();
+async function packSiteBackup(site, dir, { trigger, t0, scope }) {
+  const name = stampName(scope);
   const tmpZip = path.join(config.tmpDir, `backup-${site.id}-${Date.now()}.zip`);
   // Потоковая упаковка (archiver): архив пишется на диск напрямую, память не
   // растёт с сайтом (in-memory adm-zip мёржил RSS на 512 МБ × сайтов).
@@ -205,7 +219,17 @@ async function packSiteBackup(site, dir, { trigger, t0 }) {
       archive.on('warning', (w) => { if (w.code !== 'ENOENT') reject(w); });
       archive.pipe(out);
     });
-    addDirToZip(archive, dir, '', stats);
+    if (scope === 'database') {
+      for (const rel of manager.SITE_DATA_DIRS) {
+        const abs = path.join(dir, rel);
+        let st;
+        try { st = fs.lstatSync(abs); } catch { continue; }
+        if (st.isDirectory() && !st.isSymbolicLink()) addDirToZip(archive, abs, rel, stats, dir);
+      }
+    } else {
+      const skipData = scope === 'site' ? (rel) => manager.SITE_DATA_DIRS.includes(rel) : null;
+      addDirToZip(archive, dir, '', stats, dir, skipData);
+    }
     if (!stats.files) {
       // abort() гасит архиватор, но НЕ закрывает writeStream: пустой tmp-zip,
       // созданный open'ом стрима, оставался на диске до почасовой чистки.
@@ -213,7 +237,11 @@ async function packSiteBackup(site, dir, { trigger, t0 }) {
       await new Promise((r) => { const o = fs.createWriteStream(tmpZip); o.on('open', () => { o.destroy(); r(); }); o.on('error', r); })
         .catch(() => {})
         .then(() => { try { fs.rmSync(tmpZip, { force: true }); } catch { /* уже нет */ } });
-      const err = new Error('Каталог сайта пуст — нечего бэкапить');
+      const err = new Error(scope === 'database'
+        ? 'В каталогах data/ и deploy/data/ нет файлов базы данных'
+        : scope === 'site'
+          ? 'В файлах сайта нет данных — нечего бэкапить'
+          : 'Каталог сайта пуст — нечего бэкапить');
       err.status = 400;
       throw err;
     }
@@ -229,6 +257,7 @@ async function packSiteBackup(site, dir, { trigger, t0 }) {
   const sizeBytes = fs.statSync(path.join(backupDir(site), name)).size;
   const meta = {
     trigger,
+    scope,
     files: stats.files,
     bytes: stats.bytes,
     sizeBytes,
@@ -242,7 +271,8 @@ async function packSiteBackup(site, dir, { trigger, t0 }) {
   sched.lastRunAt = t0;
   sched.lastError = null;
   store.save();
-  manager.appendLog(site, `[panel] ${ts()} бэкап создан (${trigger === 'scheduled' ? 'по расписанию' : 'вручную'}): ${name}, ` +
+  const scopeLabel = scope === 'site' ? 'файлы сайта' : scope === 'database' ? 'база данных' : 'полный';
+  manager.appendLog(site, `[panel] ${ts()} бэкап создан (${trigger === 'scheduled' ? 'по расписанию' : 'вручную'}, ${scopeLabel}): ${name}, ` +
     `${stats.files} файл(ов), ${Math.round(sizeBytes / 1024)} КБ за ${Math.round(meta.durationMs / 100) / 10}с`);
   return { name, ...meta };
 }
@@ -278,6 +308,12 @@ function listBackups(site) {
   }
   out.sort((a, b) => b.name.localeCompare(a.name));
   return out;
+}
+
+function backupScope(site, name) {
+  assertBackupName(name);
+  const scope = readMeta(site, name).scope;
+  return BACKUP_SCOPES.has(scope) ? scope : 'full';
 }
 
 function deleteBackup(site, name) {
@@ -380,10 +416,12 @@ module.exports = {
   backupDir,
   scheduleOf,
   normalizeScheduleInput,
+  normalizeScope,
   createBackup,
   listBackups,
   deleteBackup,
   resolveBackupPath,
+  backupScope,
   removeAll,
   summary,
   dueSites,

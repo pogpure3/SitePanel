@@ -131,6 +131,45 @@ test('восстановление статического сайта возв�
   assert.ok(restored.data.content.includes('v1'), 'после восстановления вернулось v1');
 });
 
+test('файлы сайта и база данных создаются и восстанавливаются раздельно', async (t) => {
+  const { panel, tmp } = await withPanel(t, {});
+  const v1 = makeZipAt(tmp, 'split-v1', {
+    'index.html': '<h1>v1</h1>',
+    'data/app.db': 'db1',
+    'deploy/data/cache.db': 'cache1',
+  });
+  const site = await uploadNew(panel, v1, 'bk-split');
+  const dir = path.join(panel.dataDir, 'sites', site.id);
+
+  const siteBackup = await api(panel, 'POST', `/api/sites/${site.id}/backups`, { scope: 'site' });
+  assert.equal(siteBackup.status, 200, JSON.stringify(siteBackup.data));
+  assert.equal(siteBackup.data.backup.scope, 'site');
+  assert.match(siteBackup.data.backup.name, /-site\.zip$/);
+
+  fs.writeFileSync(path.join(dir, 'index.html'), '<h1>v2</h1>');
+  fs.writeFileSync(path.join(dir, 'data', 'app.db'), 'db2');
+  fs.writeFileSync(path.join(dir, 'deploy', 'data', 'cache.db'), 'cache2');
+  const restoredSite = await api(panel, 'POST', `/api/sites/${site.id}/backups/${siteBackup.data.backup.name}/restore`);
+  assert.equal(restoredSite.status, 200, JSON.stringify(restoredSite.data));
+  assert.equal(fs.readFileSync(path.join(dir, 'index.html'), 'utf8'), '<h1>v1</h1>');
+  assert.equal(fs.readFileSync(path.join(dir, 'data', 'app.db'), 'utf8'), 'db2', 'site-бэкап не откатил data/');
+  assert.equal(fs.readFileSync(path.join(dir, 'deploy', 'data', 'cache.db'), 'utf8'), 'cache2', 'site-бэкап не откатил deploy/data/');
+
+  const databaseBackup = await api(panel, 'POST', `/api/sites/${site.id}/backups`, { scope: 'database' });
+  assert.equal(databaseBackup.status, 200, JSON.stringify(databaseBackup.data));
+  assert.equal(databaseBackup.data.backup.scope, 'database');
+  assert.match(databaseBackup.data.backup.name, /-database\.zip$/);
+
+  fs.writeFileSync(path.join(dir, 'index.html'), '<h1>v3</h1>');
+  fs.writeFileSync(path.join(dir, 'data', 'app.db'), 'db3');
+  fs.writeFileSync(path.join(dir, 'deploy', 'data', 'cache.db'), 'cache3');
+  const restoredDatabase = await api(panel, 'POST', `/api/sites/${site.id}/backups/${databaseBackup.data.backup.name}/restore`);
+  assert.equal(restoredDatabase.status, 200, JSON.stringify(restoredDatabase.data));
+  assert.equal(fs.readFileSync(path.join(dir, 'index.html'), 'utf8'), '<h1>v3</h1>', 'бэкап БД не откатил файлы сайта');
+  assert.equal(fs.readFileSync(path.join(dir, 'data', 'app.db'), 'utf8'), 'db2');
+  assert.equal(fs.readFileSync(path.join(dir, 'deploy', 'data', 'cache.db'), 'utf8'), 'cache2');
+});
+
 test('восстановление node-сайта: зависимости ставятся заново, сайт отвечает', async (t) => {
   const { panel, tmp } = await withPanel(t, {});
   const mk = (marker) => makeZipAt(tmp, `app-${marker}`, {
@@ -181,6 +220,7 @@ test('валидация расписания и имени бэкапа', async
   assert.equal((await api(panel, 'PUT', `/api/sites/${site.id}/backups/schedule`, { intervalHours: 'abc' })).status, 400);
   assert.equal((await api(panel, 'PUT', `/api/sites/${site.id}/backups/schedule`, { keep: 0 })).status, 400);
   assert.equal((await api(panel, 'PUT', `/api/sites/${site.id}/backups/schedule`, { keep: 1.5 })).status, 400);
+  assert.equal((await api(panel, 'POST', `/api/sites/${site.id}/backups`, { scope: 'unknown' })).status, 400);
 
   const ok = await api(panel, 'PUT', `/api/sites/${site.id}/backups/schedule`, { enabled: true, intervalHours: 12, keep: 3 });
   assert.equal(ok.status, 200);

@@ -14,6 +14,12 @@ function fmtInterval(h) {
   return (n % 1 === 0 ? n : n.toFixed(1)) + ' ч';
 }
 
+function backupScopeLabel(scope) {
+  if (scope === 'site') return 'Файлы сайта';
+  if (scope === 'database') return 'База данных';
+  return 'Полный';
+}
+
 function backupInfoHtml(sched) {
   if (!sched) return '<p class="hint">—</p>';
   const badge = sched.enabled
@@ -77,6 +83,7 @@ async function renderBackups() {
   const rows = data.backups.map((b) => `<tr>
     <td class="fm-name">${esc(b.name.replace(/\.zip$/, ''))}</td>
     <td>${fmtBytes(b.sizeBytes)}</td>
+    <td>${backupScopeLabel(b.scope)}</td>
     <td>${b.trigger === 'scheduled' ? 'По расписанию' : 'Вручную'}</td>
     <td>${fmtDate(b.ts)}</td>
     <td class="fm-actions">
@@ -96,15 +103,21 @@ async function renderBackups() {
         <span class="hint">Хранится: ${data.totals.count} · ${fmtBytes(data.totals.sizeBytes)}</span>
         <span style="flex:1"></span>
         <button class="btn btn-sm" id="bkRefresh" title="Обновить">🔄</button>
+        <label class="hint" for="bkScope">Состав</label>
+        <select id="bkScope">
+          <option value="site">Файлы сайта</option>
+          <option value="database">База данных</option>
+          <option value="full">Полный</option>
+        </select>
         <button class="btn btn-sm btn-primary" id="bkNow">💾 Создать сейчас</button>
         <button class="btn btn-sm" id="bkSchedule">⚙ Расписание</button>
       </div>
       <table class="fm-table">
-        <thead><tr><th>Бэкап</th><th style="width:90px">Размер</th><th style="width:130px">Триггер</th><th style="width:130px">Создан</th><th style="width:150px"></th></tr></thead>
+        <thead><tr><th>Бэкап</th><th style="width:90px">Размер</th><th style="width:120px">Состав</th><th style="width:130px">Триггер</th><th style="width:130px">Создан</th><th style="width:150px"></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
       ${data.backups.length ? '' : '<p class="hint" style="margin-top:10px">Бэкапов ещё нет — создайте первый вручную или включите расписание.</p>'}
-      <p class="hint" style="margin-top:10px">Восстановление заменяет текущие файлы сайта содержимым бэкапа; сайт будет остановлен и запущен снова (для Node.js-приложений зависимости ставятся заново — это может занять пару минут). Ручной бэкап отодвигает следующий плановый на полный интервал.</p>
+      <p class="hint" style="margin-top:10px">«Файлы сайта» не включают данные из <code>data/</code> и <code>deploy/data/</code>. «База данных» включает только эти каталоги. Плановые бэкапы остаются полными. При восстановлении сайт будет остановлен и запущен снова.</p>
     </div>`;
 
   document.getElementById('backBtn').onclick = () => navigate({ name: 'site', id: siteId });
@@ -113,8 +126,9 @@ async function renderBackups() {
     const btn = document.getElementById('bkNow');
     btn.disabled = true;
     try {
-      toast('Создаём бэкап...');
-      const r = await api('POST', `/api/sites/${siteId}/backups`);
+      const scope = document.getElementById('bkScope').value;
+      toast(`Создаём бэкап: ${backupScopeLabel(scope).toLowerCase()}...`);
+      const r = await api('POST', `/api/sites/${siteId}/backups`, { scope });
       toast(`Бэкап создан (${fmtBytes(r.backup && r.backup.sizeBytes)})`, 'success');
     } catch (err) {
       toast(err.message, 'error');
@@ -125,7 +139,12 @@ async function renderBackups() {
 
   app.querySelectorAll('[data-restore]').forEach((btn) => {
     btn.onclick = async () => {
-      if (!(await confirmDialog('Восстановить из бэкапа?', `Текущие файлы сайта «${site.name}» будут заменены содержимым бэкапа ${btn.dataset.restore}.`))) return;
+      const backup = data.backups.find((b) => b.name === btn.dataset.restore) || {};
+      const scope = backup.scope || 'full';
+      const target = scope === 'site' ? 'Файлы сайта будут заменены, база данных сохранится.'
+        : scope === 'database' ? 'Будут заменены только каталоги базы данных.'
+          : 'Файлы сайта и база данных будут заменены.';
+      if (!(await confirmDialog('Восстановить из бэкапа?', `${target} Бэкап: ${btn.dataset.restore}.`))) return;
       btn.disabled = true;
       try {
         toast('Восстановление...');

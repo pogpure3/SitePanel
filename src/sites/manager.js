@@ -842,7 +842,7 @@ function inflateBounded(entry, budgetBytes) {
 }
 
 // Безопасная распаковка (zip-slip, zip-бомбы, мусор вида __MACOSX, права и symlink'и).
-function extractZip(zipPath, targetDir) {
+function extractZip(zipPath, targetDir, { stripRoot = true } = {}) {
   const zip = new AdmZip(zipPath);
   const target = path.resolve(targetDir);
 
@@ -870,7 +870,7 @@ function extractZip(zipPath, targetDir) {
 
   // Если файлы лежат в единственной корневой папке — поднимаем их на уровень выше.
   const roots = new Set(entries.map((e) => e.entryName.replace(/\\/g, '/').split('/')[0]));
-  const strip = roots.size === 1 && !entries.some((e) => !e.entryName.replace(/\\/g, '/').includes('/'));
+  const strip = stripRoot && roots.size === 1 && !entries.some((e) => !e.entryName.replace(/\\/g, '/').includes('/'));
 
   let files = 0;
   let links = 0;
@@ -1012,7 +1012,7 @@ const SECRET_PRESERVED = new Set(['.env']);
 // Каталоги, переживаемые деплоем целиком. compose-проекты с volume ./data кладут
 // SQLite/файлы в deploy/data (путь relative к compose-файлу) — без переноса
 // база стиралась бы каждым передеплоем из Git.
-const PRESERVED_DIRS = ['deploy/data', 'data'];
+const SITE_DATA_DIRS = Object.freeze(['deploy/data', 'data']);
 
 async function finalizeDeploy(site, staging, opts = {}) {
   const dir = siteDir(site);
@@ -1078,7 +1078,7 @@ async function finalizeDeploy(site, staging, opts = {}) {
     // Каталоги данных копируем из .backup ПОСЛЕ свапа (в память не буферизуются).
     // backup здесь — прежний каталог сайта, он гарантированно существует для
     // повторного деплоя (первый деплой каталогов не сохраняет — их ещё нет).
-    for (const d of PRESERVED_DIRS) {
+    for (const d of SITE_DATA_DIRS) {
       const src = path.join(backup, d);
       const dst = path.join(dir, d);
       if (fs.existsSync(src) && !fs.existsSync(dst)) {
@@ -1608,7 +1608,49 @@ async function _rollback(site) {
 // Логика здесь, а не в backups.js: нужны внутренние _stop/_start. Публичные
 // start/stop берут блокировку сайта сами — withSiteLock поверх дал бы
 // повторный вход, который lock.js отвергает.
-async function _restoreBackup(site, zipPath) {
+function restoreDataDirs(dir, staging, rollback) {
+  const incoming = SITE_DATA_DIRS.filter((rel) => {
+    try { return fs.lstatSync(path.join(staging, rel)).isDirectory(); } catch { return false; }
+  });
+  if (!incoming.length) {
+    const err = new Error('Бэкап базы данных не содержит каталогов data/ или deploy/data/');
+    err.status = 400;
+    throw err;
+  }
+
+  const changed = [];
+  fs.mkdirSync(rollback, { recursive: true });
+  try {
+    for (const rel of incoming) {
+      const source = path.join(staging, rel);
+      const target = path.join(dir, rel);
+      const old = path.join(rollback, rel);
+      const hadTarget = fs.existsSync(target);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.mkdirSync(path.dirname(old), { recursive: true });
+      if (hadTarget) fs.renameSync(target, old);
+      try {
+        fs.renameSync(source, target);
+      } catch (err) {
+        if (hadTarget && !fs.existsSync(target) && fs.existsSync(old)) fs.renameSync(old, target);
+        throw err;
+      }
+      changed.push({ target, old, hadTarget });
+    }
+  } catch (err) {
+    for (const item of changed.reverse()) {
+      rmDirSafe(item.target);
+      if (item.hadTarget && fs.existsSync(item.old)) fs.renameSync(item.old, item.target);
+    }
+    rmDirSafe(rollback);
+    throw err;
+  }
+  rmDirSafe(rollback);
+  return incoming;
+}
+
+async function _restoreBackup(site, zipPath, scope = 'full') {
+  if (!['full', 'site', 'database'].includes(scope)) scope = 'full';
   const dir = siteDir(site);
   if (!fs.existsSync(dir)) return { ok: false, error: 'Каталог сайта не найден' };
   const wasRunning = isRunning(site);
@@ -1619,12 +1661,53 @@ async function _restoreBackup(site, zipPath) {
   // распаковался целиком.
   const staging = path.join(config.tmpDir, `restore-${site.id}-${Date.now()}`);
   try {
-    extractZip(zipPath, staging);
+    // Архивы панели уже содержат пути относительно корня сайта. Автоматически
+    // снимать единственную корневую папку здесь нельзя: database-архив data/*
+    // иначе превратился бы в файлы в корне staging.
+    extractZip(zipPath, staging, { stripRoot: false });
   } catch (err) {
     rmDirSafe(staging);
     if (wasRunning) await _start(site, { manual: true });
     const wrapped = new Error('Распаковка бэкапа не удалась: ' + err.message);
     throw wrapped;
+  }
+
+  if (scope === 'database') {
+    const rollback = path.join(config.tmpDir, `restore-data-old-${site.id}-${Date.now()}`);
+    let restored;
+    try {
+      restored = restoreDataDirs(dir, staging, rollback);
+      rmDirSafe(staging);
+    } catch (err) {
+      rmDirSafe(staging);
+      if (wasRunning) await _start(site, { manual: true });
+      throw err;
+    }
+    site.updatedAt = Date.now();
+    store.flush();
+    appendLog(site, `[panel] ${ts()} база данных восстановлена из бэкапа ${path.basename(zipPath)} (${restored.join(', ')})`);
+    if (wasRunning || site.autoStart) return _start(site, { manual: true });
+    return { ok: true };
+  }
+
+  if (scope === 'site') {
+    // Архив файлов сайта не должен менять данные. Удаляем возможные data-пути
+    // из staging и переносим туда текущие каталоги перед атомарной подменой.
+    try {
+      for (const rel of SITE_DATA_DIRS) {
+        const current = path.join(dir, rel);
+        const target = path.join(staging, rel);
+        rmDirSafe(target);
+        if (fs.existsSync(current)) {
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.cpSync(current, target, { recursive: true });
+        }
+      }
+    } catch (err) {
+      rmDirSafe(staging);
+      if (wasRunning) await _start(site, { manual: true });
+      throw err;
+    }
   }
 
   // Двухшаговая подмена, как в _rollback (P-20): падение между шагами не
@@ -1671,13 +1754,13 @@ async function _restoreBackup(site, zipPath) {
   }
   site.updatedAt = Date.now();
   store.flush();
-  appendLog(site, `[panel] ${ts()} восстановлено из бэкапа ${path.basename(zipPath)}`);
+  appendLog(site, `[panel] ${ts()} ${scope === 'site' ? 'файлы сайта восстановлены' : 'восстановлено'} из бэкапа ${path.basename(zipPath)}`);
   if (wasRunning || site.autoStart) return _start(site, { manual: true });
   return { ok: true };
 }
 
-function restoreBackup(site, zipPath) {
-  return withSiteLock(site.id, () => _restoreBackup(site, zipPath));
+function restoreBackup(site, zipPath, scope = 'full') {
+  return withSiteLock(site.id, () => _restoreBackup(site, zipPath, scope));
 }
 
 /* ---------- Загрузка / удаление ---------- */
@@ -1798,6 +1881,7 @@ function removeSite(site) {
 
 module.exports = {
   processes,
+  SITE_DATA_DIRS,
   siteDir,
   siteLogFile,
   withSiteLock,
