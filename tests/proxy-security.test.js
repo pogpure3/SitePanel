@@ -71,6 +71,10 @@ test('Portal — единственный разрешённый предок в
   assert.equal(beget.get('x-frame-options'), undefined);
   assert.match(beget.get('content-security-policy'), /frame-ancestors https:\/\/portal\.evil-mesh\.ru/);
 
+  const balancer = headersFor('balancer.evil-mesh.ru');
+  assert.equal(balancer.get('x-frame-options'), undefined);
+  assert.match(balancer.get('content-security-policy'), /frame-ancestors https:\/\/portal\.evil-mesh\.ru/);
+
   const ordinary = headersFor('other.evil-mesh.ru');
   assert.equal(ordinary.get('x-frame-options'), 'DENY');
   assert.match(ordinary.get('content-security-policy'), /frame-ancestors 'none'/);

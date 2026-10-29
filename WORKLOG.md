@@ -35,6 +35,166 @@
 **Осталось.** Именованные Docker volumes и внешние СУБД не входят в архив:
 панель не хранит их подключения. Для них нужен отдельный dump-механизм.
 
+## 2026-10-29 — Независимая загрузка виджетов ProxyBalancer
+
+**Запрос.** Убрать задержку более секунды перед появлением чисел статистики и
+обновлять каждый виджет независимо.
+**Диагностика.** `public/app.js:refresh()` ждал общий `Promise.all` для
+`/api/resources`, `/api/replacements` и `/api/stats`. Замер production SQLite:
+готовый снимок статистики — 0,5 мс, списки прокси — 463,4 мс, подмены —
+960 мс. Поэтому быстрый ответ статистики не отображался до завершения
+самого медленного запроса.
+**Изменения.** В `D:\Projects\PF\ProxyBalancer\public\app.js` выделены
+`refreshStats`, `refreshResources` и `refreshReplacements`. Все запускаются
+параллельно через `Promise.allSettled`, но каждый рендерит свой виджет сразу
+после собственного ответа; ошибка одного не блокирует остальные. Версия JS в
+`public/index.html` изменена на `20261029-widgets`. Изменение опубликовано в
+ресурсе `0af4a81c92a4` на `panel_beget`.
+
+Архив отката до выкладки:
+`/root/proxy-balancer-widgets.bak.20261029-134149.tar.gz`, SHA-256
+`63d8f498da4b7a0cd6479b12907ea286d740df1488d4e65a0216504e38085641`.
+**Проверка.** `npm test`: 8 pass, 0 fail; `node --check public/app.js` и
+`git diff --check` успешны. Локальные и production SHA-256 `app.js`/`index.html`
+совпали; HTTP-ответ содержит независимые загрузчики и cache-buster. HTTPS
+вернул 200 с валидным TLS. Коммит `80fdd18` отправлен в `main`
+`pogpure3/ProxyBalancer`.
+**Осталось.** Авторизованная визуальная проверка не выполнялась: браузер открыл
+страницу входа. Причина задержки подтверждена серверным замером и regression-
+тестом порядка загрузки.
+
+## 2026-10-29 — Снимки статистики ProxyBalancer раз в 15 минут
+
+**Запрос.** Перенести расчёт успешных запросов за сегодня, 14 дней и дневных
+столбцов графика с загрузки страницы на серверный пересчёт раз в 15 минут.
+Столбцы должны показывать дату и число по образцу API progression.
+**Диагностика.** `GET /api/stats` вызывал `flushUsage()` и выполнял агрегацию
+`usage_log`/`usage_hourly` при каждой загрузке кабинета. График использовал
+только нативный `title`, без оформленной подсказки.
+**Изменения.** В `D:\Projects\PF\ProxyBalancer\lib\usage.js` добавлен
+материализованный JSON-снимок `config.usage_stats_14d`: 14 дневных значений,
+сегодня, сумма, средний отклик и значения по ссылкам. `server.js` рассчитывает
+его при старте и каждые 15 минут; `/api/stats` читает только одну строку
+`config`. Схема SQLite не менялась, старый сервер новый ключ игнорирует.
+Столбцы графика получили доступную подсказку `дата: количество` при наведении
+и клавиатурном фокусе. Добавлен cache-buster `20261029-stats`.
+
+Изменение опубликовано в Node-ресурсе `0af4a81c92a4` на `panel_beget`.
+Резервные копии до выкладки:
+`/root/proxy-balancer.db.bak.20261029-133610` (SHA-256
+`a50f00d209c55ccbe122d2635438f963a97b7f344bbd4034f5469f510863daba`)
+и `/root/proxy-balancer-files.bak.20261029-133610.tar.gz` (SHA-256
+`f9c73fcd40af66028362fc590f69e02ff60e7a9ad88746198b45ace43ee80b87`).
+Первая сборка архива остановилась на отсутствующем серверном `README.md`;
+runtime-файлы до успешного пересоздания архива не менялись.
+**Проверка.** `npm test`: 7 pass, 0 fail; `node --check` для `server.js`,
+`lib/usage.js`, `public/app.js` и `git diff --check` успешны. Тест доказывает,
+что снимок хранится в БД и не меняется до явного пересчёта. На production:
+`PRAGMA quick_check = ok`, снимок содержит 14 дат `2026-10-16`—`2026-10-29`,
+возраст после запуска 10 секунд; HTTPS вернул 200 с валидным TLS. Ошибок
+консоли на странице входа нет. Коммит `5e2015d` отправлен в `main`
+`pogpure3/ProxyBalancer`.
+**Осталось.** Авторизованный график визуально не проверялся: тестовая сессия в
+браузере отсутствовала. Данные снимка, HTML, JS и CSS проверены отдельно.
+
+## 2026-10-29 — MeshClient на panel_test: `bb9fa03` (панель спецклавиш удалена)
+
+**Запрос.** «Удаляй целиком» — нижняя панель стрелок/Esc/Enter поверх рабочего стола.
+
+**Изменения.** Коммиты `b51e97d` (код) и `bb9fa03` (журналы) в `D:\Projects\Mesh_Client`;
+передеплой `POST /api/sites/18f574a2cb69/update-git` → `{"ok":true}`.
+
+**Проверка.** `/` → 200, 30446 байт; `/app.js` → 200, 142201 байт; упоминаний
+`mfs-toolbar`/`mfsKeys` в отданных файлах — 0. Локально: `test:mobile --strict` 79 проверок,
+`npm test` exit 0.
+
+**Осталось.** Перезапуск PWA на телефоне (кэш `meshclient-v9`) — за пользователем.
+## 2026-10-29 — MeshClient на panel_test: `b805859` (полосы, режим «Заполнить», кэш PWA)
+
+**Запрос.** «Safari в PWA и Яндекс в режиме „Вписать" оставляют чёрные полосы сверху,
+снизу и по бокам».
+
+**Диагностика.** Полосы со всех сторон дал резерв под панель стрелок в mfsApplyScale
+(`public/app.js`): из доступной высоты вычиталась панель ~90 px. Плюс PWA отдавал старую
+оболочку из кэша `meshclient-v8`.
+
+**Изменения.** Коммиты `e563321` и `b805859` в `D:\Projects\Mesh_Client`: резерв убран,
+режим по умолчанию «Заполнить» (край-в-край), тумблер «Стрелки», кэш `sw.js` поднят до
+`meshclient-v9`. Передеплой сайта: `POST /api/sites/18f574a2cb69/update-git` → `{"ok":true}`.
+
+**Проверка.** `/` → 200, 31915 байт; `/app.js` → 200, 143818 байт (`return fill`,
+`mfsKeys`, `no-keys`); `/style.css` — правило `no-keys`; `/sw.js` — `meshclient-v9`.
+Локально: build/test exit 0, `test:mobile --strict` 79 проверок exit 0.
+
+**Осталось.** PWA подхватывает новую оболочку на второй загрузке (skipWaiting +
+clients.claim) — пользователю нужно перезапустить приложение один раз.
+## 2026-10-29 — MeshClient на panel_test обновлён до `d1e393a` (режимы «Вписать/Заполнить», iOS)
+
+**Запрос.** «В Яндекс.Браузере полноэкранный режим работает, но не влезает по вертикали;
+в Safari не скрывается панель меню» — после проверки предыдущей выкладки на iPhone.
+
+**Диагностика.** Cover-фит в `public/app.js` обрезал 16:9 по высоте на экране 19.5:9
+(лендшафт: 844x475 в окне 844x390, срезано 85 px вместе с панелью задач). Safari на iOS
+не поддерживает Element.requestFullscreen — панели браузера из JS не убираются.
+
+**Изменения.** В `D:\Projects\Mesh_Client` коммит `d1e393a`: режимы масштаба «Вписать»
+(по умолчанию, Math.min) и «Заполнить» (Math.max, край-в-край), выбор в панели управления
+с сохранением в `mc_mfs_fit`; в режиме «Вписать» резервируется высота панели стрелок;
+apple-mobile-web-app-* мета-теги и одноразовая подсказка про «На экран Домой» для iOS.
+Передеплой: `POST /api/sites/18f574a2cb69/update-git` → `{"ok":true}` в
+`/opt/sitepanel/data/sites/18f574a2cb69`.
+
+**Проверка.** `https://client.evil-mesh.ru/` → 200, 31653 байта (в HTML
+`apple-mobile-web-app-capable` и кнопка `mfsFit`); `/app.js` → 200, 143002 байта
+(`mc_mfs_fit`, `loadMfsFit`). Локально: `npm run build` exit 0, `npm test` exit 0,
+`node test/mobile-desktop.test.js --strict` — 79 проверок, exit 0.
+
+**Осталось.** Полный экран без панелей Safari возможен только в PWA с домашнего экрана —
+сторона платформы, не кода. Проверка «Вписать/Заполнить» на живом iPhone — за пользователем.
+## 2026-10-29 — Обновление MeshClient (`client.evil-mesh.ru`) до `a3a49cf`
+
+**Запрос.** «Обнови приложение на сервере panel_test, проверю на телефоне с iOS» —
+выложить свежий MeshClient (мобильный рабочий стол: полный экран + тачпад как в AnyDesk)
+на тестовый стенд.
+
+**Диагностика.**
+- Сайт `client.evil-mesh.ru` на panel_test — `id 18f574a2cb69`, `type node`, `port 10000`,
+  `startCommand npm start`, деплой из Git (`https://github.com/pogpure3/MeshClient.git`,
+  ветка `main`), каталог `/opt/sitepanel/data/sites/18f574a2cb69` (не git-репозиторий:
+  `.git` отсутствует, файлы раскладывает панель).
+- Рабочая копия `D:\Projects\Mesh_Client` была на `5563486`; изменения фичи лежали
+  некоммиченными, поэтому одного `update-git` было недостаточно.
+- Панель слушает `127.0.0.1:3100`, сервис `sitepanel` — active; вход по учётке из
+  `panel.env` (логин/пароль в журнал не выносятся).
+
+**Изменения.**
+- В `D:\Projects\Mesh_Client`: коммит `a3a49cf` (feat(web): phone remote desktop — true
+  fullscreen and AnyDesk-style touchpad), 11 файлов: `public/app.js`, `public/index.html`,
+  `public/style.css`, `public/i18n.js`, `src/relay.ts`, `package.json`, `WORKLOG.md`,
+  `CHANGELOG.md`, `docs/mobile-desktop-ux.md`, `test/mobile-desktop.test.js`,
+  `test/MOBILE-DESKTOP-MANUAL-CHECKLIST.md`. Пуш в `origin/main` — ok.
+- Передеплой штатным API панели: `POST /api/login` (cookie) →
+  `POST /api/sites/18f574a2cb69/update-git {}` → `{"ok":true}`, `update=200`.
+  Панель выполнила `npm ci`, `npm run build` (tsc) и рестарт сайта: новый pid 205123,
+  `health.status = up`, `lastCode 200`.
+
+**Проверка.**
+- `curl https://client.evil-mesh.ru/` → 200, 30966 байт (было 28011): в HTML присутствуют
+  `#mfsSheet`, `#mfsCursor`, класс `mfs-mode` (4 совпадения).
+- `https://client.evil-mesh.ru/app.js` → 200, 139684 байт (было 119968): 16 совпадений
+  `MFS_GESTURE`/`mfsApplyScale`/`__mfsTest`, включая cover-фит
+  `Math.max(availW / st.w` — исправление «во весь экран» на стенде.
+- `https://client.evil-mesh.ru/style.css` → новые правила `mfs-cursor`, `mobile-fs`.
+- Сайт после деплоя `running`, домен и SSL (`letsencrypt`, `active`) не менялись.
+
+**Осталось.**
+- Проверка на живом iPhone за пользователем: iOS Safari не имеет element fullscreen,
+  режим держится на `--mfs-vh` из `visualViewport`; чек-лист —
+  `D:\Projects\Mesh_Client\test\MOBILE-DESKTOP-MANUAL-CHECKLIST.md`.
+- `public/sw.js` (кэш `meshclient-v8`) не менялся: установленное PWA отдаст старый шелл,
+  после обновления нужна лишняя перезагрузка (или сброс кэша сайта).
+- Коды ошибок `/ws/desktop` по-прежнему не разведены — на телефоне все сбои показываются
+  одним текстом.
 ## 2026-10-29 — MeshClient: фикс ws:// закоммичен в репо и развёрнут через update-git
 
 **Запрос.** «закоммить и запуш в репо меш».
