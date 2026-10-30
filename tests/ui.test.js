@@ -181,6 +181,15 @@ test('style.css: компоненты следуют геометрии API пр
   assert.match(httpserver, /font-src 'self' data: https:\/\/fonts\.gstatic\.com/);
 });
 
+test('поля ввода используют цвета активной темы', () => {
+  const fields = ruleBlock('input[type="text"], input[type="password"], input[type="email"], input[type="number"], select, textarea');
+  assert.match(fields, /background:\s*var\(--bg\)/);
+  assert.match(fields, /border:\s*1px solid var\(--border\)/);
+  assert.match(fields, /color:\s*var\(--text\)/);
+  assert.match(fields, /color-scheme:\s*dark/);
+  assert.match(CSS, /:is\(\[data-theme="light"\], \[data-theme="api"\]\)[\s\S]*?color-scheme:\s*light/);
+});
+
 test('index.html: модалки и поля доступны', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'admin', 'public', 'index.html'), 'utf8');
   const dialogs = html.match(/role="dialog"/g) || [];

@@ -174,6 +174,13 @@
     <div class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="backupModalTitle">
       <h2 id="backupModalTitle">Расписание бэкапов</h2>
       <label class="checkbox"><input type="checkbox" id="backupEnabled"> Создавать бэкапы по расписанию</label>
+      <label>Состав
+        <select id="backupScheduleScope" aria-label="Состав планового бэкапа">
+          <option value="site">Файлы сайта</option>
+          <option value="database">База данных</option>
+          <option value="full">Полный</option>
+        </select>
+      </label>
       <label>Интервал, часов
         <input type="number" id="backupInterval" min="1" step="1" value="24" aria-label="Интервал между бэкапами в часах">
       </label>

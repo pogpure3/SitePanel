@@ -29,7 +29,7 @@ const { withSiteLock } = require('./lock');
 
 const NAME_RE = /^\d{8}-\d{6}(?:-(?:site|database))?\.zip$/;
 const BACKUP_SCOPES = new Set(['full', 'site', 'database']);
-const DEFAULT_SCHEDULE = { enabled: false, intervalHours: 24, keep: 5, lastRunAt: null, lastError: null };
+const DEFAULT_SCHEDULE = { enabled: false, intervalHours: 24, keep: 5, scope: 'full', lastRunAt: null, lastError: null };
 
 // siteId с уже запланированным/идущим плановым бэкапом: без этой защиты тик
 // каждые backupCheckSec ставил бы в очередь новый бэкап, пока предыдущий
@@ -365,6 +365,7 @@ function normalizeScheduleInput(site, body) {
     }
     cur.keep = n;
   }
+  if (body.scope !== undefined) cur.scope = normalizeScope(body.scope);
   return cur;
 }
 
@@ -392,7 +393,7 @@ function onScheduledFail(site, err) {
 function tick() {
   for (const site of dueSites()) {
     RUNNING.add(site.id);
-    createBackup(site, 'scheduled')
+    createBackup(site, 'scheduled', scheduleOf(site).scope)
       .catch((err) => onScheduledFail(site, err))
       .finally(() => RUNNING.delete(site.id));
   }

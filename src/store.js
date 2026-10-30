@@ -122,13 +122,14 @@ function validateSite(raw) {
   // Расписание бэкапов (по образцу Backups ispmanager). Дефолт выключен:
   // бэкапы без ведома администратора занимали бы диск сами по себе.
   if (!site.backupSchedule || typeof site.backupSchedule !== 'object' || Array.isArray(site.backupSchedule)) {
-    site.backupSchedule = { enabled: false, intervalHours: 24, keep: 5, lastRunAt: null, lastError: null };
+    site.backupSchedule = { enabled: false, intervalHours: 24, keep: 5, scope: 'full', lastRunAt: null, lastError: null };
   } else {
     const s = site.backupSchedule;
     const norm = {
       enabled: s.enabled === true,
       intervalHours: Number(s.intervalHours),
       keep: Number.isInteger(Number(s.keep)) ? Number(s.keep) : 5,
+      scope: ['full', 'site', 'database'].includes(s.scope) ? s.scope : 'full',
       lastRunAt: Number(s.lastRunAt) || null,
       lastError: typeof s.lastError === 'string' ? s.lastError : null,
     };

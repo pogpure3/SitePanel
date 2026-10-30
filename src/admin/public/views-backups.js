@@ -23,7 +23,7 @@ function backupScopeLabel(scope) {
 function backupInfoHtml(sched) {
   if (!sched) return '<p class="hint">—</p>';
   const badge = sched.enabled
-    ? `<span class="badge ssl-ok">По расписанию: каждые ${esc(fmtInterval(sched.intervalHours))}, хранить ${esc(sched.keep)}</span>`
+    ? `<span class="badge ssl-ok">По расписанию: ${backupScopeLabel(sched.scope).toLowerCase()}, каждые ${esc(fmtInterval(sched.intervalHours))}, хранить ${esc(sched.keep)}</span>`
     : '<span class="badge">По расписанию: выключено</span>';
   const last = sched.lastRunAt
     ? `<div class="hint">Последний бэкап: ${fmtDate(sched.lastRunAt)}</div>`
@@ -34,12 +34,14 @@ function backupInfoHtml(sched) {
 
 function openBackupSchedule(siteId, sched) {
   document.getElementById('backupEnabled').checked = !!(sched && sched.enabled);
+  document.getElementById('backupScheduleScope').value = (sched && sched.scope) || 'full';
   document.getElementById('backupInterval').value = (sched && sched.intervalHours) || 24;
   document.getElementById('backupKeep').value = (sched && sched.keep) || 5;
   openModal('backupModal');
   document.getElementById('backupModalSave').onclick = async () => {
     const body = {
       enabled: document.getElementById('backupEnabled').checked,
+      scope: document.getElementById('backupScheduleScope').value,
       intervalHours: Number(document.getElementById('backupInterval').value),
       keep: Number(document.getElementById('backupKeep').value),
     };
@@ -117,7 +119,7 @@ async function renderBackups() {
         <tbody>${rows}</tbody>
       </table>
       ${data.backups.length ? '' : '<p class="hint" style="margin-top:10px">Бэкапов ещё нет — создайте первый вручную или включите расписание.</p>'}
-      <p class="hint" style="margin-top:10px">«Файлы сайта» не включают данные из <code>data/</code> и <code>deploy/data/</code>. «База данных» включает только эти каталоги. Плановые бэкапы остаются полными. При восстановлении сайт будет остановлен и запущен снова.</p>
+      <p class="hint" style="margin-top:10px">«Файлы сайта» не включают данные из <code>data/</code> и <code>deploy/data/</code>. «База данных» включает только эти каталоги. Состав планового бэкапа выбирается в расписании. При восстановлении сайт будет остановлен и запущен снова.</p>
     </div>`;
 
   document.getElementById('backBtn').onclick = () => navigate({ name: 'site', id: siteId });

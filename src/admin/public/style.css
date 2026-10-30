@@ -469,11 +469,12 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   flex: 1;
 }
 
-input[type="text"], input[type="password"], input[type="email"], select, textarea {
+input[type="text"], input[type="password"], input[type="email"], input[type="number"], select, textarea {
   width: 100%;
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
+  color-scheme: dark;
   border-radius: var(--radius-sm);
   padding: 10px 14px;
   font-size: 13.5px;
@@ -483,7 +484,9 @@ input[type="text"], input[type="password"], input[type="email"], select, textare
 :is([data-theme="light"], [data-theme="api"]) select,
 :is([data-theme="light"], [data-theme="api"]) textarea {
   background: var(--bg-card);
+  color-scheme: light;
 }
+select option { background: var(--bg-card); color: var(--text); }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--primary); }
 ::placeholder { color: var(--text-dim); opacity: .8; }
 

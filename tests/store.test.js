@@ -171,12 +171,16 @@ test('SP-02: ошибка записи не оставляет временны�
 });
 
 test('SP-01: валидация записей не портит корректные данные', () => {
-  const { site } = store.validateSite({ id: ' abc ', name: '', type: 'node', domains: ['Ok.Example.COM'], port: '10005', autoStart: 'yes' });
+  const { site } = store.validateSite({
+    id: ' abc ', name: '', type: 'node', domains: ['Ok.Example.COM'], port: '10005', autoStart: 'yes',
+    backupSchedule: { enabled: true, intervalHours: 12, keep: 3 },
+  });
   assert.equal(site.id, 'abc', 'id обрезан');
   assert.equal(site.name, 'abc', 'пустое имя заменено id');
   assert.deepEqual(site.domains, ['ok.example.com'], 'домены нормализованы');
   assert.equal(site.port, 10005, 'порт приведён к числу');
   assert.equal(site.autoStart, false, 'нестроковый autoStart не становится true');
+  assert.equal(site.backupSchedule.scope, 'full', 'старое расписание остаётся полным');
   assert.equal(store.validateSite(null).site, null);
   assert.equal(store.validateSite({ name: 'без id' }).site, null);
 });

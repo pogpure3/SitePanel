@@ -220,12 +220,13 @@ test('валидация расписания и имени бэкапа', async
   assert.equal((await api(panel, 'PUT', `/api/sites/${site.id}/backups/schedule`, { intervalHours: 'abc' })).status, 400);
   assert.equal((await api(panel, 'PUT', `/api/sites/${site.id}/backups/schedule`, { keep: 0 })).status, 400);
   assert.equal((await api(panel, 'PUT', `/api/sites/${site.id}/backups/schedule`, { keep: 1.5 })).status, 400);
+  assert.equal((await api(panel, 'PUT', `/api/sites/${site.id}/backups/schedule`, { scope: 'unknown' })).status, 400);
   assert.equal((await api(panel, 'POST', `/api/sites/${site.id}/backups`, { scope: 'unknown' })).status, 400);
 
-  const ok = await api(panel, 'PUT', `/api/sites/${site.id}/backups/schedule`, { enabled: true, intervalHours: 12, keep: 3 });
+  const ok = await api(panel, 'PUT', `/api/sites/${site.id}/backups/schedule`, { enabled: true, intervalHours: 12, keep: 3, scope: 'site' });
   assert.equal(ok.status, 200);
   const detail = await api(panel, 'GET', `/api/sites/${site.id}`);
-  assert.deepEqual(detail.data.backupSchedule, { enabled: true, intervalHours: 12, keep: 3, lastRunAt: null, lastError: null });
+  assert.deepEqual(detail.data.backupSchedule, { enabled: true, intervalHours: 12, keep: 3, scope: 'site', lastRunAt: null, lastError: null });
 
   // Мусорное имя — 400, корректное по формату, но несуществующее — 404.
   assert.equal((await api(panel, 'POST', `/api/sites/${site.id}/backups/${encodeURIComponent('../etc.zip')}/restore`)).status, 400);
@@ -235,12 +236,12 @@ test('валидация расписания и имени бэкапа', async
   assert.equal((await api(panel, 'GET', `/api/sites/${site.id}/backups/20200101-000000.zip/download`)).status, 404);
 });
 
-test('планировщик создаёт бэкап по расписанию', async (t) => {
+test('планировщик создаёт бэкап выбранного состава по расписанию', async (t) => {
   const { panel, tmp } = await withPanel(t, { PANEL_BACKUP_CHECK_SEC: '1' });
-  const zip = makeZipAt(tmp, 'v1', { 'index.html': '<h1>sched</h1>' });
+  const zip = makeZipAt(tmp, 'v1', { 'index.html': '<h1>sched</h1>', 'data/app.db': 'db' });
   const site = await uploadNew(panel, zip, 'bk-sched');
 
-  const sched = await api(panel, 'PUT', `/api/sites/${site.id}/backups/schedule`, { enabled: true, intervalHours: 0.05, keep: 3 });
+  const sched = await api(panel, 'PUT', `/api/sites/${site.id}/backups/schedule`, { enabled: true, intervalHours: 0.05, keep: 3, scope: 'database' });
   assert.equal(sched.status, 200, JSON.stringify(sched.data));
 
   const list = await waitFor(async () => {
@@ -248,6 +249,8 @@ test('планировщик создаёт бэкап по расписанию
     return l.data && l.data.totals.count > 0 ? l.data : null;
   }, { timeout: 20000, label: 'плановый бэкап' });
   assert.equal(list.backups[0].trigger, 'scheduled');
+  assert.equal(list.backups[0].scope, 'database');
+  assert.match(list.backups[0].name, /-database\.zip$/);
   const detail = await api(panel, 'GET', `/api/sites/${site.id}`);
   assert.ok(detail.data.backupSchedule.lastRunAt, 'lastRunAt проставлен');
   assert.equal(detail.data.backupSchedule.lastError, null);
