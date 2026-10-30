@@ -35,7 +35,7 @@ async function renderRuntimes() {
     return `<tr>
       <td>${esc(r.title)}</td>
       <td>${r.installed ? `<span class="badge ssl-ok">${esc(r.installed)}</span>` : '<span class="badge">не установлен</span>'}</td>
-      <td><select data-rt-version="${esc(r.id)}" ${r.available.length ? '' : 'disabled'}>${opts || '<option>—</option>'}</select></td>
+      <td><select data-rt-version="${esc(r.id)}" aria-label="Версия ${esc(r.title)}" ${r.available.length ? '' : 'disabled'}>${opts || '<option>—</option>'}</select></td>
       <td><button class="btn btn-sm btn-primary" data-rt-install="${esc(r.id)}">${r.installed ? 'Обновить' : 'Установить'}</button></td>
     </tr>`;
   }).join('');

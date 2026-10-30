@@ -279,12 +279,15 @@ body.sidebar-collapsed .sidebar { align-items: stretch; }
 }
 .icon-btn:hover { background: var(--bg-hover); color: var(--text); }
 
-.theme-picker {
+.theme-picker, .select-picker {
   position: relative;
+}
+.theme-picker {
   min-width: 112px;
 }
+.select-picker { width: 100%; }
 
-.theme-toggle {
+.theme-toggle, .select-toggle {
   height: 38px;
   width: 100%;
   padding: 0 30px 0 10px;
@@ -298,7 +301,7 @@ body.sidebar-collapsed .sidebar { align-items: stretch; }
   position: relative;
   transition: background .15s;
 }
-.theme-toggle::after {
+.theme-toggle::after, .select-toggle::after {
   content: '';
   position: absolute;
   top: 50%;
@@ -309,8 +312,9 @@ body.sidebar-collapsed .sidebar { align-items: stretch; }
   border-bottom: 1.5px solid currentColor;
   transform: translateY(-70%) rotate(45deg);
 }
-.theme-toggle:hover { background: var(--theme-hover); }
-.theme-menu {
+.theme-toggle:hover, .select-toggle:hover:not(:disabled) { background: var(--theme-hover); }
+.select-toggle:disabled { opacity: .55; cursor: not-allowed; }
+.theme-menu, .select-menu {
   position: absolute;
   z-index: 500;
   top: calc(100% + 4px);
@@ -322,8 +326,9 @@ body.sidebar-collapsed .sidebar { align-items: stretch; }
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow);
 }
-.theme-menu[hidden] { display: none; }
-.theme-menu button {
+.select-menu { max-height: 260px; overflow-y: auto; }
+.theme-menu[hidden], .select-menu[hidden] { display: none; }
+.theme-menu button, .select-menu button {
   display: block;
   width: 100%;
   padding: 7px 8px;
@@ -335,8 +340,10 @@ body.sidebar-collapsed .sidebar { align-items: stretch; }
   text-align: left;
   cursor: pointer;
 }
-.theme-menu button:hover { background: var(--theme-hover); }
+.theme-menu button:hover, .select-menu button:hover:not(:disabled) { background: var(--theme-hover); }
 .theme-menu button[aria-checked="true"] { background: var(--bg-hover); }
+.select-menu button[aria-selected="true"] { background: var(--bg-hover); }
+.select-menu button:disabled { opacity: .5; cursor: not-allowed; }
 
 .mobile-only { display: none; }
 
@@ -487,6 +494,7 @@ input[type="text"], input[type="password"], input[type="email"], input[type="num
   color-scheme: light;
 }
 select option { background: var(--bg-card); color: var(--text); }
+select option:checked { background: var(--bg-hover); color: var(--text); }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--primary); }
 ::placeholder { color: var(--text-dim); opacity: .8; }
 
@@ -687,7 +695,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); }
 .modal-small { max-width: 400px; }
 .modal h2 { margin: 0 0 8px; font-size: 17px; }
 .modal label { display: block; margin: 14px 0 0; font-size: 13px; color: var(--text-dim); }
-.modal input { margin-top: 6px; }
+.modal input, .modal select, .modal .select-picker { margin-top: 6px; }
 .modal .checkbox { display: flex; align-items: center; gap: 8px; }
 .modal .checkbox input { width: auto; margin: 0; }
 

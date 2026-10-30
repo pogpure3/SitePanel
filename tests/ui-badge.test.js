@@ -165,3 +165,30 @@ test('модалки: openModal/closeModal меняют класс и возвр
   assert.equal(result.closed, true, 'окно должно закрыться');
   assert.equal(result.focusBack, true, 'фокус должен вернуться на триггер');
 });
+
+test('select: единый компонент меняет значение и подключает динамические списки', async (t) => {
+  if (!chromium) return t.skip('playwright не установлен — остаются статические проверки');
+  const { page } = await withBrowser(t);
+  await page.evaluate(() => openBackupSchedule('test', { scope: 'site', intervalHours: 24, keep: 5 }));
+  const picker = page.locator('#backupScheduleScope').locator('..');
+  await picker.locator('.select-toggle').click();
+  assert.equal(await picker.locator('.select-toggle').getAttribute('aria-expanded'), 'true');
+  await picker.locator('[data-select-index="2"]').click();
+  assert.equal(await page.locator('#backupScheduleScope').inputValue(), 'full');
+  assert.equal(await picker.locator('.select-toggle span').textContent(), 'Полный');
+  await page.evaluate(() => closeModal('backupModal'));
+
+  await page.evaluate(() => {
+    const select = document.createElement('select');
+    select.id = 'dynamic-select-test';
+    select.setAttribute('aria-label', 'Динамический список');
+    select.innerHTML = '<option value="a">Первый</option><option value="b">Второй</option>';
+    document.body.appendChild(select);
+  });
+  await page.waitForFunction(() => document.querySelector('#dynamic-select-test')?.closest('.select-picker'));
+  const dynamic = page.locator('#dynamic-select-test').locator('..');
+  await dynamic.locator('.select-toggle').click();
+  await dynamic.locator('[data-select-index="1"]').click();
+  assert.equal(await page.locator('#dynamic-select-test').inputValue(), 'b');
+  assert.equal(await dynamic.locator('.select-toggle span').textContent(), 'Второй');
+});

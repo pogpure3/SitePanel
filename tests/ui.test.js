@@ -155,7 +155,7 @@ test('темы синхронизируются с порталом и SitePanel
     assert.match(html, /data-theme-choice="light">Светлая<\/button>/);
     assert.match(html, /data-theme-choice="dark">Тёмная<\/button>/);
   }
-  assert.match(CSS, /\.theme-menu button:hover\s*\{\s*background:\s*var\(--theme-hover\)/);
+  assert.match(CSS, /\.theme-menu button:hover,\s*\.select-menu button:hover/);
   assert.match(app, /event\.key !== 'Escape'/);
   assert.match(loginJs, /event\.key !== 'Escape'/);
 });
@@ -188,6 +188,15 @@ test('поля ввода используют цвета активной те�
   assert.match(fields, /color:\s*var\(--text\)/);
   assert.match(fields, /color-scheme:\s*dark/);
   assert.match(CSS, /:is\(\[data-theme="light"\], \[data-theme="api"\]\)[\s\S]*?color-scheme:\s*light/);
+  assert.match(CSS, /select option:checked\s*\{\s*background:\s*var\(--bg-hover\);\s*color:\s*var\(--text\)/);
+});
+
+test('все select подключаются к общему тематическому компоненту', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'src', 'admin', 'public', 'app.js'), 'utf8');
+  assert.match(app, /function enhanceSelect\(/);
+  assert.match(app, /new MutationObserver\(/);
+  assert.match(CSS, /\.theme-toggle, \.select-toggle\s*\{/);
+  assert.match(CSS, /\.theme-menu, \.select-menu\s*\{/);
 });
 
 test('index.html: модалки и поля доступны', () => {

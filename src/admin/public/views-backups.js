@@ -34,7 +34,9 @@ function backupInfoHtml(sched) {
 
 function openBackupSchedule(siteId, sched) {
   document.getElementById('backupEnabled').checked = !!(sched && sched.enabled);
-  document.getElementById('backupScheduleScope').value = (sched && sched.scope) || 'full';
+  const scopeSelect = document.getElementById('backupScheduleScope');
+  scopeSelect.value = (sched && sched.scope) || 'full';
+  syncSelectControl(scopeSelect);
   document.getElementById('backupInterval').value = (sched && sched.intervalHours) || 24;
   document.getElementById('backupKeep').value = (sched && sched.keep) || 5;
   openModal('backupModal');
@@ -106,7 +108,7 @@ async function renderBackups() {
         <span style="flex:1"></span>
         <button class="btn btn-sm" id="bkRefresh" title="Обновить">🔄</button>
         <label class="hint" for="bkScope">Состав</label>
-        <select id="bkScope">
+        <select id="bkScope" aria-label="Состав бэкапа">
           <option value="site">Файлы сайта</option>
           <option value="database">База данных</option>
           <option value="full">Полный</option>

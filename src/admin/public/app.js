@@ -83,6 +83,157 @@ async function apiUpload(path, formData, onProgress) {
   });
 }
 
+/* ---------- Единые выпадающие списки ---------- */
+
+let customSelectId = 0;
+let openSelectPicker = null;
+
+function closeSelectControl(picker, returnFocus = false) {
+  if (!picker) return;
+  const toggle = picker.querySelector('.select-toggle');
+  const menu = picker.querySelector('.select-menu');
+  menu.hidden = true;
+  toggle.setAttribute('aria-expanded', 'false');
+  if (openSelectPicker === picker) openSelectPicker = null;
+  if (returnFocus) toggle.focus();
+}
+
+function openSelectControl(picker) {
+  if (openSelectPicker && openSelectPicker !== picker) closeSelectControl(openSelectPicker);
+  const toggle = picker.querySelector('.select-toggle');
+  const menu = picker.querySelector('.select-menu');
+  menu.hidden = false;
+  toggle.setAttribute('aria-expanded', 'true');
+  openSelectPicker = picker;
+  const selected = menu.querySelector('[aria-selected="true"]');
+  (selected || menu.querySelector('button:not(:disabled)'))?.focus();
+}
+
+function syncSelectControl(select, rebuild = false) {
+  const picker = select.closest('.select-picker');
+  if (!picker) return;
+  const toggle = picker.querySelector('.select-toggle');
+  const menu = picker.querySelector('.select-menu');
+  const selected = select.options[select.selectedIndex] || select.options[0];
+  toggle.querySelector('span').textContent = selected ? selected.textContent : '—';
+  toggle.disabled = select.disabled;
+  if (rebuild) {
+    menu.replaceChildren();
+    // shortcut: optgroup пока отображается плоско; добавить заголовки групп, когда такие списки появятся.
+    [...select.options].forEach((option, index) => {
+      const choice = document.createElement('button');
+      choice.type = 'button';
+      choice.role = 'option';
+      choice.dataset.selectIndex = String(index);
+      choice.textContent = option.textContent;
+      choice.disabled = option.disabled;
+      menu.appendChild(choice);
+    });
+  }
+  menu.querySelectorAll('[data-select-index]').forEach((choice) => {
+    choice.setAttribute('aria-selected', String(Number(choice.dataset.selectIndex) === select.selectedIndex));
+  });
+}
+
+function enhanceSelect(select) {
+  if (select.dataset.selectEnhanced === '1') return;
+  if (select.multiple || select.size > 1) return;
+  select.dataset.selectEnhanced = '1';
+  const labels = select.labels ? [...select.labels] : [];
+  const picker = document.createElement('div');
+  picker.className = 'select-picker';
+  select.before(picker);
+  picker.appendChild(select);
+  select.hidden = true;
+
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'select-toggle';
+  toggle.id = `select-toggle-${++customSelectId}`;
+  toggle.setAttribute('aria-haspopup', 'listbox');
+  toggle.setAttribute('aria-expanded', 'false');
+  const ownLabel = select.getAttribute('aria-label');
+  if (ownLabel) toggle.setAttribute('aria-label', ownLabel);
+  else if (!labels.length) toggle.setAttribute('aria-label', 'Выбор');
+  toggle.innerHTML = '<span></span>';
+
+  const menu = document.createElement('div');
+  menu.className = 'select-menu';
+  menu.id = `select-menu-${customSelectId}`;
+  menu.role = 'listbox';
+  menu.hidden = true;
+  toggle.setAttribute('aria-controls', menu.id);
+  picker.append(toggle, menu);
+  labels.filter((label) => label.htmlFor === select.id).forEach((label) => { label.htmlFor = toggle.id; });
+  syncSelectControl(select, true);
+
+  toggle.addEventListener('click', () => {
+    if (menu.hidden) openSelectControl(picker);
+    else closeSelectControl(picker);
+  });
+  menu.addEventListener('click', (event) => {
+    const choice = event.target.closest('[data-select-index]');
+    if (!choice || choice.disabled) return;
+    const index = Number(choice.dataset.selectIndex);
+    if (select.selectedIndex !== index) {
+      select.selectedIndex = index;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    syncSelectControl(select);
+    closeSelectControl(picker, true);
+  });
+  picker.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !menu.hidden) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeSelectControl(picker, true);
+      return;
+    }
+    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && event.target === toggle) {
+      event.preventDefault();
+      openSelectControl(picker);
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) || menu.hidden) return;
+    const choices = [...menu.querySelectorAll('button:not(:disabled)')];
+    if (!choices.length) return;
+    event.preventDefault();
+    const current = choices.indexOf(document.activeElement);
+    const next = event.key === 'Home' ? 0
+      : event.key === 'End' ? choices.length - 1
+        : event.key === 'ArrowDown' ? (current + 1) % choices.length
+          : (current - 1 + choices.length) % choices.length;
+    choices[next].focus();
+  });
+  picker.addEventListener('focusout', (event) => {
+    if (!picker.contains(event.relatedTarget)) closeSelectControl(picker);
+  });
+  select.addEventListener('change', () => syncSelectControl(select));
+}
+
+function enhanceSelects(root = document) {
+  if (root instanceof HTMLSelectElement) enhanceSelect(root);
+  else root.querySelectorAll?.('select:not([data-select-enhanced])').forEach(enhanceSelect);
+}
+
+function startSelectControls() {
+  enhanceSelects();
+  new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      const changedSelect = mutation.target.closest?.('select[data-select-enhanced="1"]');
+      if (changedSelect) syncSelectControl(changedSelect, true);
+      mutation.addedNodes.forEach((node) => {
+        if (node.nodeType === Node.ELEMENT_NODE) enhanceSelects(node);
+      });
+    });
+    if (openSelectPicker && !document.contains(openSelectPicker)) openSelectPicker = null;
+  }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'selected'] });
+}
+
+document.addEventListener('click', (event) => {
+  if (openSelectPicker && !openSelectPicker.contains(event.target)) closeSelectControl(openSelectPicker);
+});
+
 /* ---------- Тема ---------- */
 
 function currentTheme() {
@@ -575,6 +726,7 @@ themeMenu.addEventListener('click', (event) => {
   setTheme(choice.dataset.themeChoice);
   closeThemePicker();
 });
+startSelectControls();
 document.addEventListener('click', (event) => {
   if (!event.target.closest('#themePicker')) closeThemePicker();
 });
