@@ -12,18 +12,28 @@
 
 **Запрос.** Исправить падение GitHub Actions run `41209131147`.
 
-**Диагностика.** Матрица Node.js 20, 22 и 24 останавливалась на ESLint:
+**Диагностика.** Матрица Node.js 20, 22 и 24 сначала останавливалась на ESLint:
 `D:\Projects\SitePanel\tests\ui-badge.test.js:172` обращался к браузерной
 `openBackupSchedule` как к локальной переменной Node.js и нарушал `no-undef`.
+После исправления run `41209723034` прошёл lint, но три job достигли лимита
+20 минут. Лог показал 214 успешных тестов и 14 оставшихся Node-процессов:
+Playwright был установлен как пакет, а Chromium отсутствовал. Проверка учитывала
+только наличие пакета, запускала панели и теряла cleanup после ошибки браузера.
 
 **Изменения.** В `D:\Projects\SitePanel\tests\ui-badge.test.js:172` функция
 страницы вызывается через `globalThis.openBackupSchedule`; поведение теста не
-изменено.
+изменено. В `D:\Projects\SitePanel\tests\ui-badge.test.js` и
+`D:\Projects\SitePanel\tests\ui-browser.test.js` наличие Chromium проверяется
+через `chromium.executablePath()`: без браузера тесты используют предусмотренный
+статический fallback и не запускают панели.
 
 **Проверка.** `npm run lint` прошёл без ошибок. `node --test
 tests/ui-badge.test.js` прошёл 11/11, включая сценарий общего выпадающего списка.
+С браузером целевые UI-тесты прошли локально; fallback отдельно проверяется с
+пустым `PLAYWRIGHT_BROWSERS_PATH`.
 
-**Осталось.** Нет; после push исправление повторно проверит GitHub Actions.
+**Осталось.** После второго push fallback и полный suite повторно проверит
+GitHub Actions.
 
 ## 2026-10-31 — Больше места для версии ресурса
 

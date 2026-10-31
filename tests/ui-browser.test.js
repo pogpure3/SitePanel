@@ -3,7 +3,7 @@
 // Браузерный прогон UI (задача 6.2 / T-25/T-38/T-39 плана).
 // Требует playwright + chromium: npm i -D playwright && npx playwright install chromium.
 // Без установленного браузера весь файл скипается — набор остаётся зелёным
-// на стендах без Playwright (CI ставит браузер отдельным шагом).
+// на стендах и CI без Chromium.
 //
 // Проверки:
 //   T-25  интерфейс открывается и работает без ошибок консоли;
@@ -25,6 +25,7 @@ const { startPanel, api, makeZip, sleep } = require('./helpers/panel');
 let chromium = null;
 try {
   ({ chromium } = require('playwright'));
+  if (!fs.existsSync(chromium.executablePath())) chromium = null;
 } catch { /* playwright не установлен — скипаем */ }
 
 async function withBrowser(t, panel) {

@@ -20,6 +20,7 @@ const { startPanel } = require('./helpers/panel');
 let chromium = null;
 try {
   ({ chromium } = require('playwright'));
+  if (!fs.existsSync(chromium.executablePath())) chromium = null;
 } catch { /* Playwright не установлен — статический fallback */ }
 
 const PUB = path.join(__dirname, '..', 'src', 'admin', 'public');
