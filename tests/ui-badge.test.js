@@ -169,7 +169,7 @@ test('модалки: openModal/closeModal меняют класс и возвр
 test('select: единый компонент меняет значение и подключает динамические списки', async (t) => {
   if (!chromium) return t.skip('playwright не установлен — остаются статические проверки');
   const { page } = await withBrowser(t);
-  await page.evaluate(() => openBackupSchedule('test', { scope: 'site', intervalHours: 24, keep: 5 }));
+  await page.evaluate(() => globalThis.openBackupSchedule('test', { scope: 'site', intervalHours: 24, keep: 5 }));
   const picker = page.locator('#backupScheduleScope').locator('..');
   await picker.locator('.select-toggle').click();
   assert.equal(await picker.locator('.select-toggle').getAttribute('aria-expanded'), 'true');
