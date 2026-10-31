@@ -19,15 +19,27 @@
 
 **Изменения.** В `D:\Projects\SitePanel\src\admin\public\views-runtimes.js`
 ширина «Ресурс» ограничена 140 px, «Установлен» — 120 px; колонка «Версия»
-получает свободное место таблицы.
+получает свободное место таблицы. Коммит `c29109d` отправлен в `origin/main`.
+Файл опубликован как `/opt/sitepanel/src/admin/public/views-runtimes.js` на
+`panel_test` (`r1114848`) и `panel_beget` (`yyxrrbytkl`) без рестарта сервиса.
+Созданы архивы отката:
+`panel_test:/root/sitepanel-runtimes-layout-backup-20261031-171250.tar.gz` и
+`panel_beget:/root/sitepanel-runtimes-layout-backup-20261031-171250.tar.gz`.
 
 **Проверка.** `node --test tests/ui.test.js tests/ui-browser.test.js
 tests/ui-badge.test.js` прошёл 27/27. `node --check
 src/admin/public/views-runtimes.js` прошёл. Общий `npm run lint` не прошёл на
 существующей ошибке `tests/ui-badge.test.js:172`:
 `openBackupSchedule is not defined`; изменённый файл lint-конфигурация исключает.
+На обоих стендах SHA-256 опубликованного файла совпал с локальным:
+`241d6d0bc033280344ea218f7d4efe9c14b38403647ae7caa5dc427d3d0c4b91`.
+Архивы отката имеют SHA-256
+`ab97f8fa6d8425cc20db32c9a7c90eefaf1c3bc0063e98f0d9426afb063c71a5`.
+На каждом стенде `node --test tests/ui.test.js` прошёл 14/14, сервис остался
+`active`, локальный `/healthz` вернул `ok:true`. Публичные `/healthz` и `/login`
+на `panel.evil-mesh.ru` и `beget.evil-mesh.ru` вернули HTTP 200.
 
-**Осталось.** Изменение не опубликовано на стендах.
+**Осталось.** Общий lint остаётся красным из-за указанной существующей ошибки.
 
 ## 2026-10-30 — Единые выпадающие списки опубликованы на двух стендах
 
