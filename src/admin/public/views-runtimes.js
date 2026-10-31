@@ -14,7 +14,7 @@ async function renderRuntimes() {
       <p class="hint" style="margin-top:0">Версии ставятся системным apt (Node.js, PHP, Docker) или глобальным npm (Next.js).
       Установка и обновление меняют состояние всего сервера; сайты, работающие на обновляемом ресурсе, стоит перезапустить после смены версии.</p>
       <table class="fm-table" id="rtTable">
-        <thead><tr><th>Ресурс</th><th style="width:140px">Установлен</th><th style="width:220px">Версия</th><th style="width:170px"></th></tr></thead>
+        <thead><tr><th style="width:140px">Ресурс</th><th style="width:120px">Установлен</th><th>Версия</th><th style="width:170px"></th></tr></thead>
         <tbody><tr><td colspan="4" class="hint">Загрузка…</td></tr></tbody>
       </table>
     </div>`;
