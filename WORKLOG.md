@@ -19,21 +19,29 @@
 20 минут. Лог показал 214 успешных тестов и 14 оставшихся Node-процессов:
 Playwright был установлен как пакет, а Chromium отсутствовал. Проверка учитывала
 только наличие пакета, запускала панели и теряла cleanup после ошибки браузера.
+Run `41211464684` после устранения зависания завершился за 6 минут и показал
+две ошибки Docker-фикстур: запись в созданный контейнером root-volume давала
+`EACCES`, а `docker rm` ошибочно передавался как одно имя исполняемого файла.
 
 **Изменения.** В `D:\Projects\SitePanel\tests\ui-badge.test.js:172` функция
 страницы вызывается через `globalThis.openBackupSchedule`; поведение теста не
 изменено. В `D:\Projects\SitePanel\tests\ui-badge.test.js` и
 `D:\Projects\SitePanel\tests\ui-browser.test.js` наличие Chromium проверяется
 через `chromium.executablePath()`: без браузера тесты используют предусмотренный
-статический fallback и не запускают панели.
+статический fallback и не запускают панели. В
+`D:\Projects\SitePanel\tests\docker-sites.test.js` снимок `pumping.db` добавлен
+в первый архив до запуска контейнера, а `docker rm` передаётся в `execFileSync`
+отдельными аргументами.
 
 **Проверка.** `npm run lint` прошёл без ошибок. `node --test
 tests/ui-badge.test.js` прошёл 11/11, включая сценарий общего выпадающего списка.
 С браузером целевые UI-тесты прошли локально; fallback отдельно проверяется с
-пустым `PLAYWRIGHT_BROWSERS_PATH`.
+пустым `PLAYWRIGHT_BROWSERS_PATH`. Docker-интеграция локально недоступна:
+Docker Desktop не запущен; `docker-sites.test.js` прошёл 6/6 unit-проверок и
+пропустил 8 интеграционных. Окончательную проверку выполняет CI на Linux.
 
-**Осталось.** После второго push fallback и полный suite повторно проверит
-GitHub Actions.
+**Осталось.** После следующего push Docker-интеграцию и полный suite повторно
+проверит GitHub Actions.
 
 ## 2026-10-31 — Больше места для версии ресурса
 

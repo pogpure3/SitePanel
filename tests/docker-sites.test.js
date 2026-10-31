@@ -383,7 +383,9 @@ test('интеграция: deploy/-layout (Dockerfile+compose в подката
     'server.js': SERVER_JS(marker),
   });
 
-  const site = await uploadZip(panel, os.tmpdir(), 'deploy-layout', mkLayout('d1'));
+  const firstLayout = mkLayout('d1');
+  firstLayout['deploy/data/pumping.db'] = 'SQLITE-SNAPSHOT';
+  const site = await uploadZip(panel, os.tmpdir(), 'deploy-layout', firstLayout);
   assert.equal(site.type, 'docker', JSON.stringify(site));
   assert.equal(site.dockerFlavor, 'compose');
   assert.equal(site.containerPort, 7011, 'порт из deploy/compose');
@@ -392,8 +394,6 @@ test('интеграция: deploy/-layout (Dockerfile+compose в подката
 
   // Пользовательские данные в deploy/data (volume ./data относительно compose-файла).
   const dataDir = path.join(panel.dataDir, 'sites', site.id, 'deploy', 'data');
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(path.join(dataDir, 'pumping.db'), 'SQLITE-SNAPSHOT');
 
   // Обновление zip: deploy/data обязан пережить подмену каталога.
   const zip2 = path.join(os.tmpdir(), 'deploy-layout-v2.zip');
@@ -484,7 +484,7 @@ test('интеграция: monitor самолечит crashed docker-сайта
   await waitForSiteAnswer(panel, site, 'sh1', 'сайт отвечает', 240000);
 
   // Убиваем контейнер в обход панели: монитор обязан перевести сайт в crashed...
-  docker('docker rm -f sitepanel-' + site.id);
+  docker('docker', ['rm', '-f', 'sitepanel-' + site.id]);
   const crashed = await waitFor(async () => {
     const r = await api(panel, 'GET', '/api/sites/' + site.id);
     return r.data && r.data.status === 'crashed' ? r.data : null;
