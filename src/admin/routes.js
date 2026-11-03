@@ -13,6 +13,7 @@ const store = require('../store');
 const auth = require('../auth');
 const manager = require('../sites/manager');
 const backups = require('../sites/backups');
+const cronMgr = require('../sites/cron');
 const certs = require('../ssl/certs');
 const acme = require('../ssl/acme');
 const monitor = require('../monitor');
@@ -88,6 +89,12 @@ const uploadAny = multer({
     filename: (_req, file, cb) => cb(null, 'fm-' + Date.now() + '-' + Math.random().toString(36).slice(2)),
   }),
   limits: { fileSize: 100 * 1024 * 1024 },
+});
+
+// PEM-файлы своего сертификата: маленькие, читаются сразу из памяти.
+const uploadPem = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024, files: 2 },
 });
 
 function cleanupFile(file) {
@@ -178,6 +185,7 @@ router.post('/sites', upload.single('file'), wrap(async (req, res) => {
     // Расписание бэкапов: validateSite проставит дефолт только при чтении db.json,
     // поэтому у свежесозданного сайта поле нужно сразу (до перезапуска панели).
     backupSchedule: { ...backups.DEFAULT_SCHEDULE },
+    backupRemote: null,
     containerPort: null,
     dockerFlavor: null,
     createdAt: Date.now(),
@@ -195,6 +203,112 @@ router.post('/sites', upload.single('file'), wrap(async (req, res) => {
   }
   cleanupFile(req.file);
   store.flush();
+  res.json(await serializeSite(site));
+}));
+
+// Экспорт сайта для переноса на другой экземпляр SitePanel.
+router.get('/sites/:id/export', wrap(async (req, res) => {
+  const site = findSite(req);
+  const { tmpZip } = await backups.buildExport(site);
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="export.zip"; filename*=UTF-8''${encodeURIComponent(`sitepanel-${site.name || site.id}-export.zip`)}`);
+  const stream = fs.createReadStream(tmpZip);
+  stream.on('close', () => { try { fs.rmSync(tmpZip, { force: true }); } catch { /* уже нет */ } });
+  stream.pipe(res);
+}));
+
+// Импорт архива экспорта: manifest.json вынимается и не попадает в webroot,
+// настройки (домены, noindex, autoStart, порт контейнера) применяются к сайту.
+router.post('/sites/import', upload.single('file'), wrap(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Загрузите zip-архив экспорта SitePanel' });
+  const AdmZip = require('adm-zip');
+  let manifest;
+  let restZip = null;
+  try {
+    let zip;
+    try {
+      zip = new AdmZip(req.file.path);
+    } catch {
+      const err = new Error('Архив повреждён или это не zip');
+      err.status = 400;
+      throw err;
+    }
+    const entry = zip.getEntry('manifest.json');
+    if (!entry) {
+      const err = new Error('Это не архив экспорта SitePanel: внутри нет manifest.json. Обычные сайты загружаются через «Добавить сайт»');
+      err.status = 400;
+      throw err;
+    }
+    try {
+      manifest = JSON.parse(zip.readAsText(entry));
+    } catch {
+      const err = new Error('manifest.json в архиве повреждён');
+      err.status = 400;
+      throw err;
+    }
+    if (!manifest || manifest.format !== backups.EXPORT_FORMAT) {
+      const err = new Error('Неподдерживаемый формат экспорта');
+      err.status = 400;
+      throw err;
+    }
+    zip.deleteEntry(entry);
+    restZip = path.join(config.tmpDir, `import-${Date.now()}-${Math.random().toString(36).slice(2)}.zip`);
+    zip.writeZip(restZip);
+  } catch (err) {
+    cleanupFile(req.file);
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+  const m = manifest.site && typeof manifest.site === 'object' ? manifest.site : {};
+  const name = slugify(req.body.name || m.name || 'imported');
+  const id = crypto.randomBytes(6).toString('hex');
+  const site = {
+    id,
+    name,
+    type: 'static',
+    status: 'stopped',
+    domains: [],
+    port: null,
+    startCommand: null,
+    autoStart: m.autoStart === true,
+    ssl: { provider: null, status: 'none' },
+    backupSchedule: { ...backups.DEFAULT_SCHEDULE },
+    backupRemote: null,
+    containerPort: null,
+    dockerFlavor: null,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  store.state.sites.push(site);
+  try {
+    await manager.deploy(site, restZip);
+  } catch (err) {
+    store.state.sites = store.state.sites.filter((s) => s.id !== id);
+    store.flush();
+    cleanupFile(req.file);
+    try { fs.rmSync(restZip, { force: true }); } catch { /* уже нет */ }
+    return res.status(400).json({ error: 'Деплой не удался: ' + err.message });
+  }
+  // Настройки из манифеста: домены проходят тот же normalizeDomain, что и при
+  // привязке (H-19); git-токен не переносится — только адрес.
+  if (Array.isArray(m.domains)) {
+    for (const d of m.domains) {
+      const normalized = store.normalizeDomain(d);
+      if (normalized && !site.domains.includes(normalized)) site.domains.push(normalized);
+    }
+  }
+  site.noindex = m.noindex === true;
+  const cp = Number(m.containerPort);
+  if (Number.isInteger(cp) && cp > 0 && cp < 65536) site.containerPort = cp;
+  if (m.gitUrl) {
+    site.gitUrl = String(m.gitUrl);
+    site.gitBranch = m.gitBranch ? String(m.gitBranch) : null;
+    site.gitSubdir = m.gitSubdir ? String(m.gitSubdir) : null;
+  }
+  site.updatedAt = Date.now();
+  store.flush();
+  cleanupFile(req.file);
+  try { fs.rmSync(restZip, { force: true }); } catch { /* уже нет */ }
   res.json(await serializeSite(site));
 }));
 
@@ -219,6 +333,7 @@ router.post('/sites/git', wrap(async (req, res) => {
     // Расписание бэкапов: validateSite проставит дефолт только при чтении db.json,
     // поэтому у свежесозданного сайта поле нужно сразу (до перезапуска панели).
     backupSchedule: { ...backups.DEFAULT_SCHEDULE },
+    backupRemote: null,
     containerPort: null,
     dockerFlavor: null,
     createdAt: Date.now(),
@@ -291,6 +406,8 @@ router.delete('/sites/:id', wrap(async (req, res) => {
   // Бэкапы сайта переживать удаление не должны: сироты в data/backups/<id>
   // занимали бы диск вечно.
   try { backups.removeAll(site.id); } catch { /* уже нет — не критично */ }
+  // Cron-задания сайта удаляются вместе с ним; их «идущие» запуски — из очереди.
+  try { cronMgr.dropSite(site.id); } catch { /* не критично */ }
   // История проверок и кэш статистики в памяти не должны переживать удаление (M-03).
   monitor.forgetSite(site.id);
   store.state.sites = store.state.sites.filter((s) => s.id !== site.id);
@@ -412,6 +529,23 @@ router.post('/sites/:id/ssl/disable', wrap(async (req, res) => {
   site.ssl = { provider: null, status: 'none' };
   store.flush();
   res.json({ ok: true, ssl: site.ssl });
+}));
+
+// Свой сертификат: fullchain.pem + privkey.pem (мультипарт cert/key).
+router.post('/sites/:id/ssl/custom', uploadPem.fields([{ name: 'cert', maxCount: 1 }, { name: 'key', maxCount: 1 }]), wrap(async (req, res) => {
+  const site = findSite(req);
+  if (!site.domains.length) return res.status(400).json({ error: 'Сначала привяжите домен' });
+  const certFile = req.files && req.files.cert && req.files.cert[0];
+  const keyFile = req.files && req.files.key && req.files.key[0];
+  if (!certFile || !keyFile) {
+    return res.status(400).json({ error: 'Нужны оба файла: cert (fullchain.pem) и key (privkey.pem)' });
+  }
+  try {
+    const ssl = certs.installCustom(site, keyFile.buffer.toString('utf8'), certFile.buffer.toString('utf8'));
+    res.json({ ok: true, ssl });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 }));
 
 router.get('/sites/:id/health', wrap(async (req, res) => {
@@ -767,6 +901,67 @@ router.delete('/sites/:id/backups/:name', wrap(async (req, res) => {
   const site = findSite(req);
   const r = await backups.deleteBackup(site, req.params.name);
   res.json(r);
+}));
+
+// Внешнее SSH-назначение бэкапов: частичное обновление настроек.
+router.put('/sites/:id/backups/remote', wrap(async (req, res) => {
+  const site = findSite(req);
+  site.backupRemote = backups.normalizeRemoteInput(site, req.body || {});
+  store.flush();
+  res.json({ ok: true, remote: backups.sanitizeRemote(site.backupRemote) });
+}));
+
+// Скопировать конкретный архив на внешнее назначение прямо сейчас.
+router.post('/sites/:id/backups/:name/sync', wrap(async (req, res) => {
+  const site = findSite(req);
+  if (!backups.remoteOf(site)) return res.status(400).json({ error: 'Внешнее назначение не включено' });
+  const result = await backups.syncToRemote(site, req.params.name, 'manual');
+  if (!result.ok) return res.status(502).json({ error: result.error || 'Синхронизация не удалась' });
+  res.json({ ok: true });
+}));
+
+/* ---------- Cron-задания сайта ---------- */
+
+router.get('/sites/:id/cron', wrap(async (req, res) => {
+  const site = findSite(req);
+  res.json({ jobs: cronMgr.jobsOf(site).map(cronMgr.sanitized) });
+}));
+
+router.post('/sites/:id/cron', wrap(async (req, res) => {
+  const site = findSite(req);
+  const job = cronMgr.normalizeJobInput(req.body || {});
+  cronMgr.jobsOf(site).push(job);
+  store.flush();
+  res.json({ ok: true, job: cronMgr.sanitized(job) });
+}));
+
+router.put('/sites/:id/cron/:jobId', wrap(async (req, res) => {
+  const site = findSite(req);
+  const job = cronMgr.findJob(site, req.params.jobId);
+  Object.assign(job, cronMgr.normalizeJobInput(req.body || {}, job));
+  store.flush();
+  res.json({ ok: true, job: cronMgr.sanitized(job) });
+}));
+
+router.delete('/sites/:id/cron/:jobId', wrap(async (req, res) => {
+  const site = findSite(req);
+  const job = cronMgr.findJob(site, req.params.jobId);
+  site.cronJobs = site.cronJobs.filter((j) => j.id !== job.id);
+  store.flush();
+  res.json({ ok: true });
+}));
+
+// Запустить вне расписания. Ошибки выполнения — честный 500 с хвостом вывода:
+// администратор смотрит результат здесь же, алерт не шлётся.
+router.post('/sites/:id/cron/:jobId/run', wrap(async (req, res) => {
+  const site = findSite(req);
+  const job = cronMgr.findJob(site, req.params.jobId);
+  try {
+    const result = await cronMgr.runJob(site, job, 'manual');
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: 'Задание не выполнилось: ' + err.message });
+  }
 }));
 
 /* ---------- Ресурсы сервера (node/php/docker/next) ---------- */

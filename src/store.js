@@ -142,6 +142,60 @@ function validateSite(raw) {
     site.backupSchedule = norm;
   }
 
+  // Внешнее SSH-назначение бэкапов: копия архива уходит на другой сервер.
+  // Приватный ключ хранится в db.json (0600) — как git-токены; в API наружу
+  // он не отдаётся (только факт hasKey).
+  if (!site.backupRemote || typeof site.backupRemote !== 'object' || Array.isArray(site.backupRemote)) {
+    site.backupRemote = null;
+  } else {
+    const r = site.backupRemote;
+    const host = typeof r.host === 'string' ? r.host.trim().slice(0, 200) : '';
+    const user = typeof r.user === 'string' ? r.user.trim().slice(0, 100) : '';
+    const dir = typeof r.dir === 'string' ? r.dir.trim().slice(0, 300) : '';
+    const port = Number(r.port);
+    const key = typeof r.key === 'string' && r.key.trim() ? r.key.slice(0, 20000) : null;
+    site.backupRemote = {
+      enabled: r.enabled === true && !!(host && user && dir),
+      host,
+      port: Number.isInteger(port) && port > 0 && port < 65536 ? port : 22,
+      user,
+      dir,
+      key,
+      lastSyncAt: Number(r.lastSyncAt) || null,
+      lastSyncError: typeof r.lastSyncError === 'string' ? r.lastSyncError : null,
+    };
+  }
+
+  // Cron-задания сайта: битые записи отдельных заданий отбрасываются,
+  // но сайт остаётся (та же терпимость, что у доменов).
+  if (!Array.isArray(site.cronJobs)) {
+    site.cronJobs = [];
+  } else {
+    const jobs = [];
+    for (const j of site.cronJobs) {
+      if (!j || typeof j !== 'object' || Array.isArray(j)) continue;
+      if (typeof j.id !== 'string' || !j.id.trim()) continue;
+      if (typeof j.schedule !== 'string' || typeof j.command !== 'string' || !j.command) {
+        console.error(`[store] сайт ${site.id}: cron-задание ${JSON.stringify(j.id)} отброшено (нет schedule/command)`);
+        continue;
+      }
+      jobs.push({
+        id: j.id,
+        name: typeof j.name === 'string' && j.name ? j.name : 'Задание',
+        schedule: j.schedule,
+        command: j.command.slice(0, 1000),
+        enabled: j.enabled === true,
+        timeoutSec: Number.isInteger(Number(j.timeoutSec)) && Number(j.timeoutSec) >= 5 && Number(j.timeoutSec) <= 3600 ? Number(j.timeoutSec) : 60,
+        lastRunAt: Number(j.lastRunAt) || null,
+        lastStatus: j.lastStatus === 'ok' || j.lastStatus === 'failed' ? j.lastStatus : null,
+        lastError: typeof j.lastError === 'string' ? j.lastError : null,
+        lastDurationMs: Number(j.lastDurationMs) || null,
+        history: Array.isArray(j.history) ? j.history.slice(-20) : [],
+      });
+    }
+    site.cronJobs = jobs;
+  }
+
   // Телеметрия (health/fails) живёт в памяти монитора, а не в реестре (M-02):
   // ключи из старых db.json выбрасываются, чтобы не возвращались на диск.
   delete site.health;

@@ -21,8 +21,10 @@ function sslInfoHtml(site) {
   if (site.ssl && site.ssl.error) parts.push(`<div class="warn">${esc(site.ssl.error)}</div>`);
   if (!site.ssl || site.ssl.status !== 'active') return parts.join('');
 
+  const providerLabel = site.ssl.provider === 'letsencrypt' ? "Let's Encrypt"
+    : site.ssl.provider === 'custom' ? 'Свой сертификат' : 'Self-signed';
   parts.push(`<dl class="kv">
-      <dt>Провайдер</dt><dd>${site.ssl.provider === 'letsencrypt' ? "Let's Encrypt" : 'Self-signed'}</dd>
+      <dt>Провайдер</dt><dd>${providerLabel}</dd>
       <dt>Выдан</dt><dd>${fmtDate(site.ssl.issuedAt)}</dd>
       <dt>Истекает</dt><dd>${fmtDate(site.ssl.expiresAt)}</dd>
     </dl>`);
@@ -100,6 +102,7 @@ function renderSite(site) {
             </label>
             <button class="btn btn-sm btn-primary act-gitupdate">⬇ Обновить из Git</button>
             <button class="btn btn-sm act-rollback">↩ Откатить предыдущую версию</button>
+            <a class="btn btn-sm" id="exportSiteBtn" title="Скачать архив для переноса на другой сервер SitePanel">⬇ Экспорт</a>
           </div>
         </div>
 
@@ -118,6 +121,11 @@ function renderSite(site) {
           <div id="dSslInfo"></div>
           <div class="actions-row">
             <button class="btn btn-primary btn-sm" id="issueLeBtn">🔒 Выпустить Let's Encrypt</button>
+            <label class="btn btn-sm" style="margin:0" title="Загрузить готовые fullchain.pem и privkey.pem">
+              ⬆ Свой сертификат
+              <input type="file" id="sslCertFile" accept=".pem,.crt,.cer" style="display:none" aria-label="Файл сертификата (fullchain.pem)">
+              <input type="file" id="sslKeyFile" accept=".pem,.key" style="display:none" aria-label="Файл приватного ключа (privkey.pem)">
+            </label>
             <button class="btn btn-sm" id="selfsignedBtn">Self-signed (для тестов)</button>
             <button class="btn btn-sm btn-danger" id="sslOffBtn">Отключить SSL</button>
           </div>
@@ -130,6 +138,18 @@ function renderSite(site) {
           <div class="actions-row">
             <button class="btn btn-sm" id="backupOpenBtn">📂 Все бэкапы</button>
           </div>
+        </div>
+
+        <div class="panel">
+          <h2>Cron-задания</h2>
+          <div id="dCronList"><p class="hint">Загрузка...</p></div>
+          <form class="inline-form" id="cronAddForm" style="margin-top:10px">
+            <input type="text" name="name" placeholder="Название" aria-label="Название задания" autocomplete="off" style="max-width:130px">
+            <input type="text" name="schedule" placeholder="*/15 * * * *" aria-label="Cron-выражение" autocomplete="off" style="max-width:130px">
+            <input type="text" name="command" placeholder="Команда" aria-label="Команда" autocomplete="off">
+            <button class="btn btn-primary" type="submit">Добавить</button>
+          </form>
+          <p class="domain-hint">Формат из 5 полей: минуты часы день-месяца месяц день-недели. Команда выполняется в каталоге сайта от имени пользователя панели. Пропущенные во время простоя панели слоты не догоняются.</p>
         </div>
 
         <div class="panel">
@@ -191,6 +211,7 @@ function renderSite(site) {
   act('.act-restart', () => api('POST', `/api/sites/${siteId}/restart`).then(() => toast('Перезапуск...', 'success')));
   act('.act-files', () => { navigate({ name: 'files', id: siteId, path: '' }); });
   document.getElementById('backupOpenBtn').onclick = () => navigate({ name: 'backups', id: siteId });
+  document.getElementById('exportSiteBtn').href = '/api/sites/' + siteId + '/export';
   act('.act-rollback', async () => {
     if (!(await confirmDialog('Откатить версию?', 'Текущая версия будет заменена предыдущей (бэкапом).'))) return undefined;
     const r = await api('POST', `/api/sites/${siteId}/rollback`);
@@ -296,6 +317,28 @@ function renderSite(site) {
     toast('Self-signed сертификат выпущен', 'success');
     render();
   });
+
+  // Свой сертификат: два шага — сначала fullchain, затем ключ.
+  const sslCertInput = document.getElementById('sslCertFile');
+  const sslKeyInput = document.getElementById('sslKeyFile');
+  sslCertInput.addEventListener('change', () => {
+    if (sslCertInput.files.length) sslKeyInput.click();
+  });
+  sslKeyInput.addEventListener('change', async () => {
+    if (!sslCertInput.files.length || !sslKeyInput.files.length) return;
+    const fd = new FormData();
+    fd.append('cert', sslCertInput.files[0]);
+    fd.append('key', sslKeyInput.files[0]);
+    sslCertInput.value = '';
+    sslKeyInput.value = '';
+    try {
+      await apiUpload(`/api/sites/${siteId}/ssl/custom`, fd);
+      toast('Свой сертификат установлен', 'success');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+    render();
+  });
   act('#sslOffBtn', async () => {
     if (await confirmDialog('Отключить SSL?', 'HTTPS перестанет работать для этого сайта.')) {
       await api('POST', `/api/sites/${siteId}/ssl/disable`);
@@ -304,9 +347,29 @@ function renderSite(site) {
     }
   });
 
+  // Cron: начальная загрузка списка и добавление нового задания.
+  loadCron(siteId);
+  document.getElementById('cronAddForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    try {
+      // form.elements, а не form.<name>: у HTMLFormElement свойство name —
+      // имя самой формы, а не поле с name="name".
+      await api('POST', `/api/sites/${siteId}/cron`, {
+        name: form.elements.name.value.trim(),
+        schedule: form.elements.schedule.value.trim(),
+        command: form.elements.command.value.trim(),
+      });
+      toast('Задание добавлено', 'success');
+      form.reset();
+      loadCron(siteId);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+
   // Логи
-  const logBox = document.getElementById('logBox');
-  async function refreshLog() {
+  const logBox = document.getElementById('logBox');  async function refreshLog() {
     try {
       const data = await api('GET', `/api/sites/${siteId}/logs?lines=300`);
       logBox.textContent = data.log || '(логи пусты)';
@@ -333,6 +396,59 @@ function renderSite(site) {
   });
 
   patchDetail(site);
+}
+
+// Cron-задания сайта: список с запуском/выключением/удалением. Загружается
+// отдельно от карточки: задания меняются редко, а карточка перерисовывается
+// часто (health, статусы).
+async function loadCron(siteId) {
+  const box = document.getElementById('dCronList');
+  if (!box) return;
+  let jobs;
+  try {
+    jobs = (await api('GET', `/api/sites/${siteId}/cron`)).jobs || [];
+  } catch (err) {
+    box.innerHTML = `<p class="hint">${esc(err.message)}</p>`;
+    return;
+  }
+  if (!jobs.length) {
+    box.innerHTML = '<p class="hint">Заданий нет.</p>';
+    return;
+  }
+  const statusHtml = (j) => j.lastStatus === 'ok'
+    ? `<span class="badge ssl-ok" title="Последний запуск успешен">✓ ${esc(fmtDate(j.lastRunAt))}</span>`
+    : j.lastStatus === 'failed'
+      ? `<span class="badge loop-bad" title="${esc(j.lastError || 'ошибка')}">✗ ${esc((j.lastError || 'ошибка').slice(0, 60))}</span>`
+      : '<span class="badge">не запускалось</span>';
+  box.innerHTML = jobs.map((j) => `
+    <div class="domain-row" data-cron="${esc(j.id)}">
+      <span>${esc(j.name)} · <code>${esc(j.schedule)}</code><br><span class="hint">${esc(j.command)}</span></span>
+      <span style="white-space:nowrap">
+        ${statusHtml(j)}
+        <button class="remove" data-cron-run title="Запустить сейчас" aria-label="Запустить задание ${esc(j.name)}">▶</button>
+        <button class="remove" data-cron-toggle title="${j.enabled ? 'Выключить' : 'Включить'}" aria-label="${j.enabled ? 'Выключить' : 'Включить'} задание ${esc(j.name)}">${j.enabled ? '⏸' : '⏵'}</button>
+        <button class="remove" data-cron-del title="Удалить задание" aria-label="Удалить задание ${esc(j.name)}">✕</button>
+      </span>
+    </div>`).join('');
+  box.querySelectorAll('[data-cron]').forEach((row) => {
+    const id = row.dataset.cron;
+    const job = jobs.find((j) => j.id === id);
+    const act = async (method, path, okText, body) => {
+      try {
+        await api(method, `/api/sites/${siteId}/cron/${id}${path}`, body);
+        toast(okText, 'success');
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+      loadCron(siteId);
+    };
+    row.querySelector('[data-cron-run]').addEventListener('click', () => act('POST', '/run', 'Задание выполнено'));
+    row.querySelector('[data-cron-toggle]').addEventListener('click', () =>
+      act('PUT', '', job.enabled ? 'Задание выключено' : 'Задание включено', { enabled: !job.enabled }));
+    row.querySelector('[data-cron-del]').addEventListener('click', async () => {
+      if (await confirmDialog('Удалить задание?', 'История запусков тоже будет удалена.')) act('DELETE', '', 'Задание удалено');
+    });
+  });
 }
 
 // Точечное обновление страницы сайта: только изменяемые значения.

@@ -78,6 +78,57 @@ async function issueSelfSigned(site) {
   store.save();
 }
 
+/* ---------- Свой сертификат ---------- */
+
+// Домены сертификата из SAN (или CN, если SAN нет) — чтобы таблица
+// «покрытие привязанных доменов» работала и для загруженного сертификата.
+function certDomains(cert) {
+  const out = [];
+  if (cert.subjectAltName) {
+    for (const part of cert.subjectAltName.split(',')) {
+      const m = part.trim().match(/^DNS:(.+)$/);
+      if (m) out.push(m[1].trim().toLowerCase());
+    }
+  }
+  if (!out.length) {
+    const cn = /(?:^|,)CN=([^,]+)/.exec(cert.subject || '');
+    if (cn) out.push(cn[1].trim().toLowerCase());
+  }
+  return out;
+}
+
+// Установка своего сертификата (fullchain + ключ). Ключ проверяется на
+// соответствие листовому сертификату: расхождение иначе всплыло бы только
+// при рукопожатии TLS, и сайт остался бы без HTTPS и без объяснимой причины.
+function installCustom(site, keyPem, certPem) {
+  let cert;
+  try {
+    cert = new crypto.X509Certificate(certPem);
+  } catch {
+    throw new Error('Не удалось разобрать сертификат: ожидается PEM (лист + цепочка)');
+  }
+  let keyPub;
+  try {
+    keyPub = crypto.createPublicKey(keyPem).export({ type: 'spki', format: 'der' });
+  } catch {
+    throw new Error('Не удалось разобрать приватный ключ: ожидается PEM без шифрования');
+  }
+  if (!cert.publicKey.export({ type: 'spki', format: 'der' }).equals(keyPub)) {
+    throw new Error('Приватный ключ не соответствует сертификату');
+  }
+  saveCertFiles(site, keyPem, certPem);
+  site.ssl = {
+    provider: 'custom',
+    status: 'active',
+    domains: certDomains(cert),
+    issuedAt: Date.now(),
+    expiresAt: certExpiresAt(certPem) || Date.now(),
+    error: null,
+  };
+  store.save();
+  return site.ssl;
+}
+
 /* ---------- Файлы сертификатов ---------- */
 
 function saveCertFiles(site, keyPem, fullchainPem) {
@@ -177,6 +228,8 @@ function defaultCertFiles() {
 module.exports = {
   ensureDefaultCert,
   issueSelfSigned,
+  installCustom,
+  certDomains,
   saveCertFiles,
   readCertFiles,
   removeCertFiles,

@@ -33,6 +33,11 @@ const config = {
   leStaging: bool(process.env.PANEL_LE_STAGING, false),
   leRenewDays: posInt(process.env.PANEL_LE_RENEW_DAYS, 30, 1, 365),
 
+  // Сброс пароля. Токен отправляется только на заранее заданный адрес.
+  passwordResetEmail: process.env.PANEL_PASSWORD_RESET_EMAIL || 'pogpure3@gmail.com',
+  publicUrl: process.env.PANEL_PUBLIC_URL || '',
+  passwordResetTtlMin: posInt(process.env.PANEL_PASSWORD_RESET_TTL_MIN, 15, 5, 60),
+
   uploadMaxMb: posInt(process.env.PANEL_UPLOAD_MAX_MB, 300, 1, 4096),
   internalPortFrom: posInt(process.env.PANEL_INTERNAL_PORT_FROM, 10000, 1024, 65000),
 
@@ -100,6 +105,12 @@ const config = {
   // памяти: без своего лимита бэкап большого сайта уронил бы панель по OOM,
   // а общий maxUncompressedMb (2 ГБ по умолчанию) слишком велик для памяти.
   backupMaxSiteMb: posInt(process.env.PANEL_BACKUP_MAX_MB, 512, 1, 16384),
+
+  // Cron-задания сайтов: команды по cron-выражению из каталога сайта.
+  // PANEL_CRON=0 выключает функцию целиком (по образцу PANEL_BACKUPS).
+  cronEnabled: bool(process.env.PANEL_CRON, true),
+  // Период опроса cron-выражений: нижняя граница — для тестов.
+  cronCheckSec: posInt(process.env.PANEL_CRON_CHECK_SEC, 30, 1, 86400),
 
   // Docker-сайты: бюджет на docker build / compose build. Сборка с npm/pip
   // внутри может идти долго; зависший билд не должен держать блокировку сайта

@@ -15,6 +15,7 @@ const dashboard = require('./dashboard');
 const alerts = require('./alerts');
 const manager = require('./sites/manager');
 const backups = require('./sites/backups');
+const cronMgr = require('./sites/cron');
 const { createServers, listenServers, securityHeaders } = require('./httpserver');
 const adminRoutes = require('./admin/routes');
 const terminal = require('./admin/terminal');
@@ -88,6 +89,8 @@ async function main() {
   app.get('/login.js', login.loginScript);
   app.post('/api/login', express.json({ limit: '16kb' }), login.loginApi);
   app.post('/api/logout', login.logoutApi);
+  app.post('/api/password-reset/request', express.json({ limit: '16kb' }), login.passwordResetRequestApi);
+  app.post('/api/password-reset/confirm', express.json({ limit: '16kb' }), login.passwordResetConfirmApi);
   app.post('/sso/callback', express.urlencoded({ extended: false, limit: '8kb' }), sso.callback);
   app.use(auth.middleware);
   // Лимит согласован с редактором файлов (EDIT_MAX_BYTES = 2 МБ в admin/routes.js):
@@ -149,6 +152,8 @@ async function main() {
   // Плановые бэкапы после boot(): тик идёт сразу и берёт блокировки сайтов —
   // они должны быть свободны, как и для первого тика монитора (M-01).
   backups.start();
+  // Cron-задания сайтов — тот же принцип: первый тик берёт блокировки.
+  cronMgr.start();
   acme.startRenewalLoop();
 
   // Почасовая уборка data/tmp (SP-14): чистка при старте не спасает от

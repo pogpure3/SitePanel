@@ -16,6 +16,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 // archiver@8 — ESM-пакет ("type": "module"): CJS-интероп в зависимости от пути
 // и порядка загрузки отдаёт то класс, то namespace-объект (ловилось на живой
 // панели: «Archiver is not a constructor»). ZipArchive надёжен: формат 'zip'
@@ -150,7 +151,14 @@ function addDirToZip(archive, absDir, rel, stats, rootDir = absDir, skipPath = n
  */
 function createBackup(site, trigger, scope = 'full') {
   const normalizedScope = normalizeScope(scope);
-  return serializeBackupRun(() => withSiteLock(site.id, () => _createBackup(site, trigger, normalizedScope)));
+  return serializeBackupRun(() => withSiteLock(site.id, () => _createBackup(site, trigger, normalizedScope))).then((meta) => {
+    // Копия на внешний сервер — фоном: локальная копия уже надёжна, а сетевой
+    // сбой не должен отменять результат бэкапа в ответе API.
+    if (remoteOf(site)) {
+      syncToRemote(site, meta.name, trigger).catch(() => {});
+    }
+    return meta;
+  });
 }
 
 // Очередь бэкапов: хвост не «залипает» на ошибке предыдущего запуска.
@@ -330,11 +338,192 @@ function removeAll(siteId) {
   fs.rmSync(path.join(config.backupsDir, siteId), { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
 }
 
+/* ---------- Внешнее SSH-назначение ---------- */
+
+/** Активное назначение или null (включено и заполнено). */
+function remoteOf(site) {
+  return site.backupRemote && site.backupRemote.enabled ? site.backupRemote : null;
+}
+
+/** Наружу ключ не отдаётся — только факт его наличия. */
+function sanitizeRemote(remote) {
+  if (!remote) return null;
+  const { key, ...rest } = remote;
+  return { ...rest, hasKey: !!key };
+}
+
+/**
+ * Привести тело PUT /backups/remote к валидной форме. Частичное обновление;
+ * ключ меняется только когда пришло непустое значение.
+ */
+function normalizeRemoteInput(site, body) {
+  const cur = site.backupRemote ? { ...site.backupRemote } : {
+    enabled: false, host: '', port: 22, user: '', dir: '', key: null,
+    lastSyncAt: null, lastSyncError: null,
+  };
+  if (body.enabled !== undefined) cur.enabled = body.enabled === true;
+  if (body.host !== undefined) cur.host = String(body.host).trim().slice(0, 200);
+  if (body.port !== undefined) {
+    const n = Number(body.port);
+    if (!Number.isInteger(n) || n < 1 || n > 65535) {
+      const err = new Error('port: целое от 1 до 65535');
+      err.status = 400;
+      throw err;
+    }
+    cur.port = n;
+  }
+  if (body.user !== undefined) cur.user = String(body.user).trim().slice(0, 100);
+  if (body.dir !== undefined) cur.dir = String(body.dir).trim().slice(0, 300);
+  if (body.key !== undefined && String(body.key || '').trim()) cur.key = String(body.key).trim().slice(0, 20000);
+  if (cur.enabled && !(cur.host && cur.user && cur.dir)) {
+    const err = new Error('Для включения нужны host, user и dir');
+    err.status = 400;
+    throw err;
+  }
+  return cur;
+}
+
+function shQuote(s) {
+  return `'${String(s).replace(/'/g, `'\\''`)}'`;
+}
+
+/** Один ssh/scp вызов. Ответ всегда resolve — ошибки фиксируются в lastSyncError. */
+function sshRun(argv, timeoutMs) {
+  return new Promise((resolve) => {
+    const child = spawn(argv[0], argv.slice(1), { windowsHide: true, timeout: timeoutMs });
+    let output = '';
+    child.stdout.on('data', (c) => { output += c; });
+    child.stderr.on('data', (c) => { output += c; });
+    child.on('error', (err) => resolve({ ok: false, error: err.message }));
+    child.on('close', (code) => {
+      resolve({ ok: code === 0, error: code === 0 ? null : (output.trim().split('\n').pop() || `код выхода ${code}`) });
+    });
+  });
+}
+
+/**
+ * Скопировать архив на внешнее SSH-назначение (scp). Ключ из db.json пишется
+ * во временный файл 0600 и удаляется сразу после передачи. BatchMode: без
+ * ключа и агентной аутентификации задание падает сразу, а не ждёт пароль.
+ */
+async function syncToRemote(site, name, trigger = 'manual') {
+  const remote = remoteOf(site);
+  if (!remote) return { ok: false, skipped: true };
+  const filePath = resolveBackupPath(site, name);
+  const t0 = Date.now();
+  const tmpKey = remote.key ? path.join(config.tmpDir, `bk-key-${site.id}-${Date.now()}.pem`) : null;
+  if (tmpKey) fs.writeFileSync(tmpKey, remote.key.endsWith('\n') ? remote.key : remote.key + '\n', { mode: 0o600 });
+  try {
+    const idArgs = tmpKey ? ['-i', tmpKey, '-o', 'IdentitiesOnly=yes'] : [];
+    const mk = await sshRun(['ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new', '-p', String(remote.port), ...idArgs, `${remote.user}@${remote.host}`, `mkdir -p ${shQuote(remote.dir)}`], 30000);
+    if (!mk.ok) throw new Error(`ssh mkdir не удался: ${mk.error}`);
+    const cp = await sshRun(['scp', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new', '-P', String(remote.port), ...idArgs, filePath, `${remote.user}@${remote.host}:${shQuote(remote.dir + '/' + name)}`], 600000);
+    if (!cp.ok) throw new Error(`scp не удался: ${cp.error}`);
+    remote.lastSyncAt = Date.now();
+    remote.lastSyncError = null;
+    store.save();
+    manager.appendLog(site, `[panel] ${ts()} бэкап ${name} скопирован на ${remote.user}@${remote.host}:${remote.dir} за ${Math.round((Date.now() - t0) / 100) / 10}с`);
+    return { ok: true };
+  } catch (err) {
+    const message = String(err.message || err).slice(0, 500);
+    remote.lastSyncError = message;
+    store.save();
+    manager.appendLog(site, `[panel] ${ts()} копия бэкапа ${name} на внешний сервер не удалась: ${message}`);
+    // Алерт только про плановые: ручную синхронизацию администратор делает осознанно.
+    if (trigger === 'scheduled') {
+      alerts.send(`⚠️ SitePanel: копия бэкапа «${site.name}» на ${remote.host} не удалась: ${message}`).catch(() => {});
+    }
+    return { ok: false, error: message };
+  } finally {
+    if (tmpKey) { try { fs.rmSync(tmpKey, { force: true }); } catch { /* уже нет */ } }
+  }
+}
+
+/* ---------- Экспорт сайта для переноса ---------- */
+
+const EXPORT_FORMAT = 'sitepanel-export';
+
+/**
+ * Собрать архив переноса: все файлы сайта (как «полный» бэкап) + manifest.json
+ * с настройками (домены, noindex, autoStart). Сертификаты и git-токены в архив
+ * НЕ попадают — приватные ключи переносятся вручную или выпускаются заново.
+ * Архив пишется во временный файл; маршрут удаляет его после отдачи.
+ */
+async function buildExport(site) {
+  const dir = manager.siteDir(site);
+  if (!fs.existsSync(dir)) {
+    const err = new Error('Каталог сайта не найден');
+    err.status = 404;
+    throw err;
+  }
+  const t0 = Date.now();
+  return withSiteLock(site.id, async () => {
+    let containerWasRunning = false;
+    if (site.type === 'docker' && site.status === 'running') {
+      await manager.stopDockerContainers(site);
+      containerWasRunning = true;
+    }
+    const tmpZip = path.join(config.tmpDir, `export-${site.id}-${Date.now()}.zip`);
+    try {
+      const manifest = {
+        format: EXPORT_FORMAT,
+        version: 1,
+        exportedAt: t0,
+        site: {
+          name: site.name,
+          type: site.type,
+          domains: [...site.domains],
+          noindex: !!site.noindex,
+          autoStart: !!site.autoStart,
+          containerPort: site.containerPort || null,
+          gitUrl: site.gitUrl || null,
+          gitBranch: site.gitBranch || null,
+          gitSubdir: site.gitSubdir || null,
+        },
+      };
+      const stats = { files: 0, bytes: 0 };
+      const archive = new ZipArchive({ zlib: { level: 9 } });
+      const written = new Promise((resolve, reject) => {
+        const out = fs.createWriteStream(tmpZip);
+        out.on('close', () => resolve(archive.pointer()));
+        out.on('error', reject);
+        archive.on('error', reject);
+        archive.on('warning', (w) => { if (w.code !== 'ENOENT') reject(w); });
+        archive.pipe(out);
+      });
+      archive.append(Buffer.from(JSON.stringify(manifest, null, 2)), { name: 'manifest.json' });
+      addDirToZip(archive, dir, '', stats, dir);
+      if (!stats.files) {
+        archive.abort();
+        const err = new Error('Каталог сайта пуст — экспортировать нечего');
+        err.status = 400;
+        throw err;
+      }
+      await archive.finalize();
+      await written;
+      const sizeBytes = fs.statSync(tmpZip).size;
+      manager.appendLog(site, `[panel] ${ts()} сайт экспортирован: ${stats.files} файл(ов), ${Math.round(sizeBytes / 1024)} КБ за ${Math.round((Date.now() - t0) / 100) / 10}с`);
+      return { tmpZip, manifest };
+    } catch (err) {
+      try { fs.rmSync(tmpZip, { force: true }); } catch { /* уже нет */ }
+      throw err;
+    } finally {
+      if (containerWasRunning) {
+        try { await manager.startDockerContainers(site); } catch (err) {
+          manager.setStatusIf(site, ['running', 'starting'], 'crashed');
+          manager.appendLog(site, `[panel] ${ts()} контейнер не поднялся после экспорта: ${err.message}`);
+        }
+      }
+    }
+  });
+}
+
 /** Сводка для API: расписание + список + суммарный объём. */
 function summary(site) {
   const list = listBackups(site);
   return {
     schedule: { ...scheduleOf(site) },
+    remote: sanitizeRemote(site.backupRemote),
     backups: list,
     totals: { count: list.length, sizeBytes: list.reduce((sum, b) => sum + (b.sizeBytes || 0), 0) },
   };
@@ -418,6 +607,7 @@ module.exports = {
   scheduleOf,
   normalizeScheduleInput,
   normalizeScope,
+  normalizeRemoteInput,
   createBackup,
   listBackups,
   deleteBackup,
@@ -425,6 +615,11 @@ module.exports = {
   backupScope,
   removeAll,
   summary,
+  sanitizeRemote,
+  remoteOf,
+  syncToRemote,
+  EXPORT_FORMAT,
+  buildExport,
   dueSites,
   tick,
   start,

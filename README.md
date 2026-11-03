@@ -13,6 +13,7 @@
 - **SSL**:
   - **Let's Encrypt** по HTTP-01 challenge (автоматический выпуск и продление за 30 дней до истечения, есть staging-режим для отладки);
   - **Self-signed** сертификаты для локальной разработки;
+  - **Свой сертификат** — загрузка готовых `fullchain.pem` + `privkey.pem` (панель проверяет соответствие ключа и сертификата);
   - динамический SNI — сертификаты подставляются по имени домена, HTTP автоматически редиректит на HTTPS после выпуска сертификата.
 - **Управление** — запуск, остановка, перезапуск; автоперезапуск при падении (по умолчанию 5 попыток
   с нарастающим интервалом 1с → 4с → 16с → 64с → 256с); после исчерпания лимита автоперезапуск
@@ -21,8 +22,10 @@
   перезапускаться бесконечно; автозапуск при старте панели; обновление новой версией zip
   с сохранением бэкапа и откатом одной кнопкой.
 - **Мониторинг** — health-check каждые 30 секунд с историей проверок, память процесса, PID, аптайм; просмотр логов сайта (stdout+stderr) с автообновлением.
-- **Бэкапы** — копия выбранного состава вручную или по расписанию: файлы сайта, база данных (`data/` и `deploy/data/`) либо всё вместе; восстановление сохраняет части, которых нет в выбранном архиве; `node_modules` не копируется, при восстановлении зависимости ставятся заново.
-- **Админ-панель** — веб-интерфейс на русском, страница входа с сессией в HttpOnly-cookie (плюс HTTP Basic для API и скриптов), тёмная/светлая темы, веб-терминал, смена логина/пароля.
+- **Бэкапы** — копия выбранного состава вручную или по расписанию: файлы сайта, база данных (`data/` и `deploy/data/`) либо всё вместе; восстановление сохраняет части, которых нет в выбранном архиве; `node_modules` не копируется, при восстановлении зависимости ставятся заново. Каждый новый бэкап можно автоматически копировать на другой сервер по SSH (scp; ключ или агентная аутентификация).
+- **Cron-задания** — команды по cron-выражению (5 полей) в каталоге сайта, с таймаутом, историей запусков и алертами о падениях (`PANEL_CRON=0` выключает).
+- **Перенос сайта** — экспорт сайта (файлы + манифест с доменами и настройками) в zip и импорт такого архива на другом экземпляре панели: кнопка «Экспорт» в карточке, «Импорт» в шапке. Сертификаты и git-токены не переносятся.
+- **Админ-панель** — веб-интерфейс на русском, страница входа с сессией в HttpOnly-cookie (плюс HTTP Basic для API и скриптов), тёмная/светлая темы, веб-терминал, смена и сброс пароля по одноразовой ссылке.
 
 ## Быстрый старт
 
@@ -49,7 +52,11 @@ PANEL_HTTP_PORT=8080 PANEL_HTTPS_PORT=8443 PANEL_ADMIN_PORT=3000 npm start
 `PANEL_INSTALL_TIMEOUT_MIN` (10), `PANEL_MAX_UNCOMPRESSED_MB` (2048), `PANEL_MAX_ZIP_ENTRIES` (50000),
 `PANEL_DOCKER_BUILD_TIMEOUT_MIN` (10 — бюджет сборки Docker-сайтов), `PANEL_DOCKER_SITES` (1; `0` выключает Docker-сайты),
 `PANEL_BACKUPS` (1; `0` выключает плановые бэкапы), `PANEL_BACKUP_CHECK_SEC` (60),
-`PANEL_BACKUP_MAX_MB` (512 — потолок размера сайта, упаковываемого в бэкап).
+`PANEL_BACKUP_MAX_MB` (512 — потолок размера сайта, упаковываемого в бэкап),
+`PANEL_CRON` (1; `0` выключает cron-задания), `PANEL_CRON_CHECK_SEC` (30 — период опроса cron-выражений),
+`PANEL_PUBLIC_URL` (публичный HTTPS-адрес панели), `PANEL_PASSWORD_RESET_EMAIL`
+(`pogpure3@gmail.com`), `PANEL_PASSWORD_RESET_TTL_MIN` (15), а также SMTP-переменные
+из PQR: `SMTP_HOST`, `SMTP_PORT` (587), `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`.
 
 ## Тесты
 
@@ -297,10 +304,19 @@ HTTP Basic при этом продолжает работать — для API,
 | POST   | `/api/sites/:id/backups/:name/restore` | Восстановить из бэкапа |
 | GET    | `/api/sites/:id/backups/:name/download` | Скачать бэкап (zip) |
 | DELETE | `/api/sites/:id/backups/:name` | Удалить бэкап |
+| PUT    | `/api/sites/:id/backups/remote` | Внешнее SSH-назначение: `{enabled, host, port, user, dir, key?}` |
+| POST   | `/api/sites/:id/backups/:name/sync` | Скопировать бэкап на внешний сервер сейчас |
+| GET    | `/api/sites/:id/cron` | Cron-задания сайта с историей |
+| POST   | `/api/sites/:id/cron` | Создать задание `{schedule, command, name?, enabled?, timeoutSec?}` |
+| PUT/DELETE | `/api/sites/:id/cron/:jobId` | Изменить / удалить задание |
+| POST   | `/api/sites/:id/cron/:jobId/run` | Запустить задание сейчас |
+| GET    | `/api/sites/:id/export` | Экспорт сайта в zip (файлы + manifest.json) |
+| POST   | `/api/sites/import` | Импорт из архива экспорта: multipart `file` (zip) |
 | POST   | `/api/sites/:id/domains` | Привязать домен `{"domain": "..."}` |
 | DELETE | `/api/sites/:id/domains/:domain` | Отвязать домен |
 | POST   | `/api/sites/:id/ssl/issue` | Выпуск LE `{"domains":[], "email":"", "staging":bool}` |
 | POST   | `/api/sites/:id/ssl/selfsigned` | Self-signed сертификат |
+| POST   | `/api/sites/:id/ssl/custom` | Свой сертификат: multipart `cert` (fullchain.pem), `key` (privkey.pem) |
 | POST   | `/api/sites/:id/ssl/disable` | Отключить SSL |
 | GET/PUT| `/api/settings` | Настройки LE |
 | POST   | `/api/password` | Смена логина/пароля |

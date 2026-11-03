@@ -379,7 +379,8 @@ function sslBadge(ssl) {
   if (!ssl || ssl.status === 'none') return '<span class="badge">Без SSL</span>';
   if (ssl.status === 'active') {
     const days = ssl.expiresAt ? Math.round((ssl.expiresAt - Date.now()) / 86400000) : null;
-    const prefix = ssl.provider === 'letsencrypt' ? "Let's Encrypt" : 'Self-signed';
+    const prefix = ssl.provider === 'letsencrypt' ? "Let's Encrypt"
+      : ssl.provider === 'custom' ? 'Свой сертификат' : 'Self-signed';
     const until = days !== null ? ` · ${days} дн.` : '';
     return `<span class="badge ssl-ok" title="Истекает: ${esc(fmtDate(ssl.expiresAt))}">🔒 ${esc(prefix)}${until}</span>`;
   }
@@ -762,6 +763,26 @@ document.getElementById('sidebarBackdrop').addEventListener('click', () => {
 
 document.getElementById('addSiteBtn').addEventListener('click', () => {
   openModal('addModal');
+});
+
+// Импорт сайта из архива экспорта SitePanel (перенос с другого сервера).
+document.getElementById('importSiteBtn').addEventListener('click', () => {
+  document.getElementById('importFileInput').click();
+});
+document.getElementById('importFileInput').addEventListener('change', async (e) => {
+  const input = e.target;
+  if (!input.files.length) return;
+  const fd = new FormData();
+  fd.append('file', input.files[0]);
+  input.value = '';
+  try {
+    toast('Импорт сайта...');
+    const site = await apiUpload('/api/sites/import', fd);
+    toast(`Сайт «${site.name}» импортирован`, 'success');
+    navigate({ name: 'site', id: site.id });
+  } catch (err) {
+    toast(err.message, 'error');
+  }
 });
 
 // Закрытие модалок: клик по подложке и кнопки «Отмена».
