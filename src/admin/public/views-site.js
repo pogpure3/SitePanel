@@ -133,14 +133,6 @@ function renderSite(site) {
         </div>
 
         <div class="panel">
-          <h2>Бэкапы</h2>
-          <div id="dBackupInfo"></div>
-          <div class="actions-row">
-            <button class="btn btn-sm" id="backupOpenBtn">📂 Все бэкапы</button>
-          </div>
-        </div>
-
-        <div class="panel">
           <h2>Cron-задания</h2>
           <div id="dCronList"><p class="hint">Загрузка...</p></div>
           <form class="inline-form" id="cronAddForm" style="margin-top:10px">
@@ -150,6 +142,14 @@ function renderSite(site) {
             <button class="btn btn-primary" type="submit">Добавить</button>
           </form>
           <p class="domain-hint">Формат из 5 полей: минуты часы день-месяца месяц день-недели. Команда выполняется в каталоге сайта от имени пользователя панели. Пропущенные во время простоя панели слоты не догоняются.</p>
+        </div>
+
+        <div class="panel">
+          <h2>Бэкапы</h2>
+          <div id="dBackupInfo"></div>
+          <div class="actions-row">
+            <button class="btn btn-sm" id="backupOpenBtn">📂 Все бэкапы</button>
+          </div>
         </div>
 
         <div class="panel">
