@@ -138,6 +138,16 @@
       margin-bottom: 14px;
     }
     .login-error:empty { display: none; }
+    .login-success {
+      background: #052e16;
+      border: 1px solid #166534;
+      color: #bbf7d0;
+      border-radius: 8px;
+      padding: 9px 12px;
+      font-size: 13px;
+      margin-bottom: 14px;
+    }
+    .login-success:empty { display: none; }
     .login-btn {
       width: 100%;
       background: var(--primary);
@@ -154,6 +164,19 @@
     }
     .login-btn:hover { background: var(--primary-hover); }
     .login-btn:disabled { opacity: .6; cursor: wait; }
+    .login-link {
+      display: block;
+      margin: 12px auto 0;
+      padding: 3px 6px;
+      border: 0;
+      background: transparent;
+      color: var(--primary);
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .login-link:hover { text-decoration: underline; }
+    .reset-copy { color: var(--text-dim); font-size: 13px; text-align: center; margin: 0 0 18px; }
     .login-hint { color: var(--text-dim); font-size: 12px; text-align: center; margin: 18px 0 0; line-height: 1.55; }
     .login-theme {
       position: fixed;
@@ -213,6 +236,7 @@
     .theme-menu button:hover { background: var(--theme-hover); }
     .theme-menu button[aria-checked="true"] { background: var(--bg-hover); }
     :focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
+    [hidden] { display: none !important; }
     @media (prefers-reduced-motion: reduce) {
       * { transition-duration: .001ms !important; animation-duration: .001ms !important; }
     }
@@ -233,9 +257,10 @@
       <svg viewBox="0 0 100 100" aria-hidden="true"><rect width="100" height="100" rx="24" class="logo-bg"/><text x="50" y="73" font-size="64" font-family="system-ui, sans-serif" font-weight="700" fill="#fff" text-anchor="middle">S</text></svg>
       <span class="brand-name">Site<b>Panel</b></span>
     </div>
-    <h1>Вход в панель управления</h1>
+    <h1 id="title">Вход в панель управления</h1>
 
     <div class="login-error" id="err" role="alert"></div>
+    <div class="login-success" id="success" role="status"></div>
 
     <form id="f" novalidate>
       <label>Логин
@@ -251,9 +276,27 @@
         </div>
       </label>
       <button type="submit" class="login-btn" id="go">Войти</button>
+      <button type="button" class="login-link" id="forgot">Забыли пароль?</button>
     </form>
 
-    <p class="login-hint">После 10 неудачных попыток вход с этого адреса<br>блокируется на 15 минут.</p>
+    <form id="resetRequest" novalidate hidden>
+      <p class="reset-copy">Одноразовая ссылка придёт на резервную почту панели.</p>
+      <button type="submit" class="login-btn" id="sendReset">Отправить ссылку</button>
+      <button type="button" class="login-link" data-back-login>Вернуться ко входу</button>
+    </form>
+
+    <form id="resetConfirm" novalidate hidden>
+      <label>Новый пароль
+        <input type="password" name="password" autocomplete="new-password" minlength="8">
+      </label>
+      <label>Повторите пароль
+        <input type="password" name="confirm" autocomplete="new-password" minlength="8">
+      </label>
+      <button type="submit" class="login-btn" id="saveReset">Сохранить пароль</button>
+      <button type="button" class="login-link" data-back-login>Вернуться ко входу</button>
+    </form>
+
+    <p class="login-hint" id="hint">После 10 неудачных попыток вход с этого адреса<br>блокируется на 15 минут.</p>
   </main>
 
   <script src="/login.js"></script>

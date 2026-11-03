@@ -69,10 +69,40 @@
 
   var form = document.getElementById('f');
   var errBox = document.getElementById('err');
+  var successBox = document.getElementById('success');
   var go = document.getElementById('go');
+  var title = document.getElementById('title');
+  var hint = document.getElementById('hint');
+  var requestForm = document.getElementById('resetRequest');
+  var confirmForm = document.getElementById('resetConfirm');
 
   function showError(text) {
     errBox.textContent = text;
+    if (text) successBox.textContent = '';
+  }
+
+  function showView(view, heading) {
+    form.hidden = view !== form;
+    requestForm.hidden = view !== requestForm;
+    confirmForm.hidden = view !== confirmForm;
+    title.textContent = heading;
+    hint.hidden = view !== form;
+    showError('');
+  }
+
+  function postJson(url, body) {
+    return fetch(url, {
+      method: 'POST',
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body || {}),
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (data) {
+        return { status: res.status, data: data };
+      });
+    });
   }
 
   form.addEventListener('submit', function (e) {
@@ -85,18 +115,7 @@
     }
     go.disabled = true;
     showError('');
-    fetch('/api/login', {
-      method: 'POST',
-      headers: {
-        'X-Requested-With': 'XMLHttpRequest',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ user: user, password: password }),
-    }).then(function (res) {
-      return res.json().catch(function () { return {}; }).then(function (data) {
-        return { status: res.status, data: data };
-      });
-    }).then(function (r) {
+    postJson('/api/login', { user: user, password: password }).then(function (r) {
       if (r.status === 200 && r.data.ok) {
         location.href = next;
         return;
@@ -108,6 +127,68 @@
     }).catch(function () {
       showError('Нет связи с панелью. Проверьте адрес и повторите.');
       go.disabled = false;
+    });
+  });
+
+  /* ---------- Сброс пароля ---------- */
+  var resetMatch = /^#reset=([0-9a-f]{64})$/.exec(location.hash || '');
+  var resetToken = resetMatch ? resetMatch[1] : '';
+  if (resetToken) showView(confirmForm, 'Новый пароль');
+
+  document.getElementById('forgot').addEventListener('click', function () {
+    showView(requestForm, 'Сброс пароля');
+  });
+  document.querySelectorAll('[data-back-login]').forEach(function (button) {
+    button.addEventListener('click', function () {
+      history.replaceState(null, '', location.pathname + location.search);
+      resetToken = '';
+      showView(form, 'Вход в панель управления');
+    });
+  });
+
+  requestForm.addEventListener('submit', function (event) {
+    event.preventDefault();
+    var button = document.getElementById('sendReset');
+    button.disabled = true;
+    showError('');
+    postJson('/api/password-reset/request', {}).then(function (r) {
+      if (r.status === 202 && r.data.ok) {
+        successBox.textContent = r.data.message || 'Ссылка отправлена.';
+        button.textContent = 'Отправлено';
+        return;
+      }
+      showError((r.data && r.data.error) || 'Не удалось отправить письмо.');
+      button.disabled = false;
+    }).catch(function () {
+      showError('Нет связи с панелью. Проверьте адрес и повторите.');
+      button.disabled = false;
+    });
+  });
+
+  confirmForm.addEventListener('submit', function (event) {
+    event.preventDefault();
+    var password = confirmForm.password.value;
+    if (password.length < 8) return showError('Пароль должен быть не короче 8 символов.');
+    if (password !== confirmForm.confirm.value) return showError('Пароли не совпадают.');
+    if (!resetToken) return showError('Ссылка недействительна или устарела.');
+    var button = document.getElementById('saveReset');
+    button.disabled = true;
+    showError('');
+    postJson('/api/password-reset/confirm', { token: resetToken, password: password }).then(function (r) {
+      if (r.status === 200 && r.data.ok) {
+        history.replaceState(null, '', location.pathname + location.search);
+        resetToken = '';
+        confirmForm.reset();
+        showView(form, 'Вход в панель управления');
+        successBox.textContent = 'Пароль изменён. Войдите с новым паролем.';
+        pass.focus();
+        return;
+      }
+      showError((r.data && r.data.error) || 'Не удалось изменить пароль.');
+      button.disabled = false;
+    }).catch(function () {
+      showError('Нет связи с панелью. Проверьте адрес и повторите.');
+      button.disabled = false;
     });
   });
 })();

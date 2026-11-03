@@ -6,6 +6,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
+const net = require('net');
 const path = require('path');
 
 const { startPanel, api, apiRaw } = require('./helpers/panel');
@@ -44,6 +45,50 @@ function cookieFrom(res) {
   return { raw, pair, value: pair.split('=')[1] || '' };
 }
 
+/** Минимальный локальный SMTP для сквозной проверки без внешней почты. */
+async function smtpCapture(t) {
+  let resolveMessage;
+  const message = new Promise((resolve) => { resolveMessage = resolve; });
+  const server = net.createServer((socket) => {
+    let buffer = '';
+    let dataMode = false;
+    socket.setEncoding('utf8');
+    socket.write('220 localhost ESMTP\r\n');
+    socket.on('data', (chunk) => {
+      buffer += chunk;
+      for (;;) {
+        if (dataMode) {
+          const end = buffer.indexOf('\r\n.\r\n');
+          if (end < 0) return;
+          resolveMessage(buffer.slice(0, end));
+          buffer = buffer.slice(end + 5);
+          dataMode = false;
+          socket.write('250 2.0.0 queued\r\n');
+          continue;
+        }
+        const end = buffer.indexOf('\r\n');
+        if (end < 0) return;
+        const line = buffer.slice(0, end);
+        buffer = buffer.slice(end + 2);
+        if (/^EHLO /i.test(line)) socket.write('250-localhost\r\n250 PIPELINING\r\n');
+        else if (/^DATA$/i.test(line)) {
+          dataMode = true;
+          socket.write('354 End data with <CR><LF>.<CR><LF>\r\n');
+        } else if (/^QUIT$/i.test(line)) {
+          socket.end('221 Bye\r\n');
+          return;
+        } else socket.write('250 OK\r\n');
+      }
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  return { port: server.address().port, message };
+}
+
 test('страница /login доступна без пароля, интерфейс — нет', async (t) => {
   const panel = await withAuthPanel(t);
 
@@ -54,12 +99,16 @@ test('страница /login доступна без пароля, интерф
   assert.equal(page.status, 200, '/login должен отдаваться без пароля');
   const html = await page.text();
   assert.match(html, /Вход в панель управления/, 'это не страница входа');
+  assert.match(html, /Забыли пароль\?/, 'на странице входа нет сброса пароля');
+  assert.match(html, /id="resetConfirm"/, 'на странице входа нет формы нового пароля');
   assert.ok(!html.includes('id="app"'), 'страница входа не должна содержать разметку панели');
 
   // Скрипт формы тоже должен отдаваться без пароля, иначе страница мертва.
   const script = await fetch(panel.base + '/login.js');
   assert.equal(script.status, 200, 'login.js не отдался без авторизации — форма не работает');
-  assert.match(await script.text(), /\/api\/login/, 'в login.js нет обработчика формы');
+  const loginScript = await script.text();
+  assert.match(loginScript, /\/api\/login/, 'в login.js нет обработчика формы');
+  assert.match(loginScript, /\/api\/password-reset\/request/, 'в login.js нет запроса сброса');
 
   for (const p of ['/', '/app.js', '/style.css']) {
     const res = await fetch(panel.base + p, { headers: { Accept: 'text/html' }, redirect: 'manual' });
@@ -112,10 +161,61 @@ test('неверный пароль даёт 401 и понятную ошибк�
   assert.ok(!res.headers.get('set-cookie'), 'при неудаче cookie сессии выдаваться не должно');
 });
 
+test('сброс пароля отправляет одноразовую ссылку на почту по умолчанию', async (t) => {
+  const smtp = await smtpCapture(t);
+  const panel = await withAuthPanel(t, {
+    PANEL_PUBLIC_URL: 'https://panel.example',
+    SMTP_HOST: '127.0.0.1',
+    SMTP_PORT: String(smtp.port),
+    SMTP_FROM: 'SitePanel <no-reply@example.com>',
+  });
+
+  const requested = await api(panel, 'POST', '/api/password-reset/request', {});
+  assert.equal(requested.status, 202, requested.text);
+  const repeated = await api(panel, 'POST', '/api/password-reset/request', {});
+  assert.equal(repeated.status, 429, 'повторный запрос не ограничен');
+  assert.ok(repeated.headers.get('retry-after'), 'ограничение без Retry-After');
+  const rawMail = await smtp.message;
+  const rawBody = rawMail.split('\r\n\r\n').slice(1).join('\r\n\r\n');
+  const decodedBody = /Content-Transfer-Encoding:\s*base64/i.test(rawMail)
+    ? Buffer.from(rawBody.replace(/\s/g, ''), 'base64').toString('utf8')
+    : rawBody.replace(/=\r\n/g, '').replace(/=3D/gi, '=');
+  const mail = rawMail + '\n' + decodedBody;
+  assert.match(mail, /To: pogpure3@gmail\.com/i, 'письмо ушло не на адрес по умолчанию');
+  const tokenMatch = /#reset=([0-9a-f]{64})/i.exec(mail);
+  assert.ok(tokenMatch, 'в письме нет токена сброса');
+  const token = tokenMatch[1].toLowerCase();
+
+  // Чужой запрос не должен погасить действующую ссылку.
+  const malformed = await api(panel, 'POST', '/api/password-reset/confirm', { token: 'bad', password: 'new-password-123' });
+  assert.equal(malformed.status, 400);
+
+  const changed = await api(panel, 'POST', '/api/password-reset/confirm', { token, password: 'new-password-123' });
+  assert.equal(changed.status, 200, changed.text);
+  const reused = await api(panel, 'POST', '/api/password-reset/confirm', { token, password: 'another-password-123' });
+  assert.equal(reused.status, 400, 'одноразовый токен применился повторно');
+
+  const oldLogin = await api(panel, 'POST', '/api/login', { user: LOGIN_USER, password: LOGIN_PASS });
+  assert.equal(oldLogin.status, 401, 'старый пароль продолжает работать');
+  const newLogin = await api(panel, 'POST', '/api/login', { user: LOGIN_USER, password: 'new-password-123' });
+  assert.equal(newLogin.status, 200, 'новый пароль не работает');
+});
+
+test('сброс пароля без SMTP не выдаёт токен и сообщает о настройке', async (t) => {
+  const panel = await withAuthPanel(t, { PANEL_PUBLIC_URL: 'https://panel.example' });
+  const res = await api(panel, 'POST', '/api/password-reset/request', {});
+  assert.equal(res.status, 503);
+  assert.match(res.data.error, /не настроен/i);
+});
+
 test('без CSRF-заголовка вход отклоняется (login CSRF)', async (t) => {
   const panel = await withAuthPanel(t);
   const res = await apiRaw(panel, 'POST', '/api/login', { user: LOGIN_USER, password: LOGIN_PASS });
   assert.equal(res.status, 403, 'POST /api/login без X-Requested-With должен отклоняться');
+  const requestReset = await apiRaw(panel, 'POST', '/api/password-reset/request', {});
+  assert.equal(requestReset.status, 403, 'запрос сброса без X-Requested-With должен отклоняться');
+  const confirmReset = await apiRaw(panel, 'POST', '/api/password-reset/confirm', {});
+  assert.equal(confirmReset.status, 403, 'подтверждение сброса без X-Requested-With должно отклоняться');
 });
 
 test('выход гасит сессию', async (t) => {

@@ -18,6 +18,7 @@
 
 const path = require('path');
 const auth = require('../auth');
+const passwordReset = require('../password-reset');
 const { effectiveScheme } = require('../httpserver');
 
 const LOGIN_PAGE = path.join(__dirname, 'public', 'login.html');
@@ -127,11 +128,52 @@ function logoutApi(req, res) {
   res.json({ ok: true });
 }
 
+/** POST /api/password-reset/request — отправить ссылку на заранее заданную почту. */
+async function passwordResetRequestApi(req, res) {
+  if (!csrfOk(req)) {
+    return res.status(403).json({ error: 'Запрос отклонён: отсутствует заголовок X-Requested-With (защита от CSRF).' });
+  }
+  try {
+    await passwordReset.requestReset();
+    console.log(`[auth] ссылка сброса пароля отправлена (ip: ${auth.clientIp(req)})`);
+    res.status(202).json({ ok: true, message: 'Ссылка для сброса отправлена на резервную почту.' });
+  } catch (err) {
+    if (err.code === 'RATE_LIMIT') {
+      res.setHeader('Retry-After', String(err.retryAfterSec || 60));
+      return res.status(429).json({ error: err.message });
+    }
+    if (err.code === 'NOT_CONFIGURED') return res.status(503).json({ error: 'Сброс пароля не настроен на сервере.' });
+    console.error('[auth] ошибка отправки ссылки сброса:', err.message);
+    return res.status(502).json({ error: 'Не удалось отправить письмо. Повторите позже.' });
+  }
+}
+
+/** POST /api/password-reset/confirm — применить одноразовый токен из письма. */
+function passwordResetConfirmApi(req, res) {
+  if (!csrfOk(req)) {
+    return res.status(403).json({ error: 'Запрос отклонён: отсутствует заголовок X-Requested-With (защита от CSRF).' });
+  }
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const result = passwordReset.confirmReset(body.token, body.password);
+    console.log(`[auth] пароль сброшен по одноразовой ссылке (ip: ${auth.clientIp(req)})`);
+    res.json({ ok: true, user: result.user });
+  } catch (err) {
+    if (err.code === 'INVALID_TOKEN' || err.code === 'INVALID_PASSWORD') {
+      return res.status(400).json({ error: err.message });
+    }
+    console.error('[auth] ошибка сброса пароля:', err.message);
+    return res.status(500).json({ error: 'Не удалось изменить пароль' });
+  }
+}
+
 module.exports = {
   loginPage,
   loginScript,
   loginApi,
   logoutApi,
+  passwordResetRequestApi,
+  passwordResetConfirmApi,
   safeNext,
   // для тестов
   _csrfOk: csrfOk,
