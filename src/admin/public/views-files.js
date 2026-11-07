@@ -60,25 +60,28 @@ async function renderFiles() {
   }
 
   const segs = (view.path || '').split('/').filter(Boolean);
-  const crumbs = [`<a data-crumb="">${esc(data.root)}</a>`].concat(
-    segs.map((s, i) => `<a data-crumb="${esc(segs.slice(0, i + 1).join('/'))}">${esc(s)}</a>`)
+  const crumbs = [`<button type="button" data-crumb="">${esc(data.root)}</button>`].concat(
+    segs.map((s, i) => `<button type="button" data-crumb="${esc(segs.slice(0, i + 1).join('/'))}">${esc(s)}</button>`)
   ).join(' / ');
 
   const rows = [];
   if (segs.length) {
-    rows.push(`<tr><td>↩</td><td class="fm-name" data-nav="${esc(segs.slice(0, -1).join('/'))}">..</td><td></td><td></td><td></td></tr>`);
+    rows.push(`<tr><td>↩</td><td class="fm-name"><button type="button" class="fm-name-button" data-nav="${esc(segs.slice(0, -1).join('/'))}" aria-label="На уровень выше">..</button></td><td></td><td></td><td></td></tr>`);
   }
   for (const e of data.entries) {
     const p = fmJoin(view.path, e.name);
     const actions = e.dir
-      ? `<button data-rename="${esc(p)}" title="Переименовать">✎</button><button data-del="${esc(p)}" title="Удалить">✕</button>`
-      : `<button data-edit="${esc(p)}" title="Редактировать">✏️</button>` +
-        `<button data-rename="${esc(p)}" title="Переименовать">✎</button>` +
-        `<a href="/api/sites/${view.id}/file?path=${encodeURIComponent(p)}&download=1" title="Скачать">⬇</a>` +
-        `<button data-del="${esc(p)}" title="Удалить">✕</button>`;
+      ? `<button data-rename="${esc(p)}" title="Переименовать" aria-label="Переименовать ${esc(e.name)}">✎</button><button data-del="${esc(p)}" title="Удалить" aria-label="Удалить ${esc(e.name)}">✕</button>`
+      : `<button data-edit="${esc(p)}" title="Редактировать" aria-label="Редактировать ${esc(e.name)}">✏️</button>` +
+        `<button data-rename="${esc(p)}" title="Переименовать" aria-label="Переименовать ${esc(e.name)}">✎</button>` +
+        `<a href="/api/sites/${view.id}/file?path=${encodeURIComponent(p)}&download=1" title="Скачать" aria-label="Скачать ${esc(e.name)}">⬇</a>` +
+        `<button data-del="${esc(p)}" title="Удалить" aria-label="Удалить ${esc(e.name)}">✕</button>`;
+    const nameControl = e.dir
+      ? `<button type="button" class="fm-name-button" data-nav="${esc(p)}">${esc(e.name)}</button>`
+      : `<button type="button" class="fm-name-button" data-edit-file="${esc(p)}">${esc(e.name)}</button>`;
     rows.push(`<tr>
       <td>${e.dir ? '📁' : '📄'}</td>
-      <td class="fm-name" data-nav="${e.dir ? esc(p) : ''}" data-edit-file="${e.dir ? '' : esc(p)}">${esc(e.name)}</td>
+      <td class="fm-name">${nameControl}</td>
       <td>${e.dir ? '—' : fmtBytes(e.size)}</td>
       <td>${fmtDate(e.mtime)}</td>
       <td class="fm-actions">${actions}</td>
@@ -94,15 +97,18 @@ async function renderFiles() {
       <div class="fm-bar">
         <span class="crumbs" id="fmCrumbs">${crumbs}</span>
         <span style="flex:1"></span>
-        <button class="btn btn-sm" id="fmRefresh" title="Обновить">🔄</button>
+        <button class="btn btn-sm" id="fmRefresh" title="Обновить" aria-label="Обновить список файлов">🔄</button>
         <button class="btn btn-sm" id="fmMkdir">📁 Папка</button>
         <button class="btn btn-sm" id="fmNewFile">📄 Файл</button>
-        <label class="btn btn-sm" style="margin:0">⬆ Загрузить<input type="file" id="fmUpload" style="display:none"></label>
+        <button type="button" class="btn btn-sm" id="fmUploadBtn">⬆ Загрузить</button>
+        <input type="file" id="fmUpload" hidden aria-label="Выбрать файл для загрузки">
       </div>
-      <table class="fm-table">
-        <thead><tr><th style="width:30px"></th><th>Имя</th><th style="width:90px">Размер</th><th style="width:130px">Изменён</th><th style="width:150px"></th></tr></thead>
-        <tbody>${rows.join('')}</tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="fm-table">
+          <thead><tr><th style="width:30px"></th><th>Имя</th><th style="width:90px">Размер</th><th style="width:130px">Изменён</th><th style="width:150px"></th></tr></thead>
+          <tbody>${rows.join('')}</tbody>
+        </table>
+      </div>
       ${data.entries.length ? '' : '<p class="hint" style="margin-top:10px">Каталог пуст</p>'}
     </div>`;
 
@@ -111,7 +117,7 @@ async function renderFiles() {
 
   document.getElementById('backBtn').onclick = () => navigate({ name: 'site', id: siteId });
   document.getElementById('fmRefresh').onclick = () => renderFiles();
-  document.querySelectorAll('#fmCrumbs a').forEach((a) => (a.onclick = () => nav(a.dataset.crumb)));
+  document.querySelectorAll('#fmCrumbs [data-crumb]').forEach((button) => (button.onclick = () => nav(button.dataset.crumb)));
 
   document.getElementById('fmMkdir').onclick = async () => {
     const name = await promptDialog('Имя новой папки');
@@ -133,6 +139,7 @@ async function renderFiles() {
   };
 
   const upload = document.getElementById('fmUpload');
+  document.getElementById('fmUploadBtn').onclick = () => upload.click();
   upload.addEventListener('change', async () => {
     if (!upload.files.length) return;
     const file = upload.files[0];
@@ -154,7 +161,7 @@ async function renderFiles() {
   });
 
   app.querySelectorAll('[data-nav]').forEach((el) => {
-    el.addEventListener('click', () => { if (el.dataset.nav !== '' && el.dataset.nav !== undefined) nav(el.dataset.nav); });
+    el.addEventListener('click', () => { if (el.dataset.nav !== undefined) nav(el.dataset.nav); });
   });
   app.querySelectorAll('[data-edit-file]').forEach((el) => {
     el.addEventListener('click', () => { if (el.dataset.editFile) openEditor(siteId, el.dataset.editFile); });

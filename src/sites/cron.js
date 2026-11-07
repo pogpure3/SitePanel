@@ -24,6 +24,8 @@ const { withSiteLock } = require('./lock');
 
 const HISTORY_MAX = 20;
 const DEFAULT_TIMEOUT_SEC = 60;
+const KILL_GRACE_MS = 1000;
+const TREE_EXIT_WAIT_MS = 5000;
 
 // Идущие запуски: jobId → Promise. Без этого тик каждые CRON_CHECK_SEC ставил
 // бы в очередь новый запуск, пока предыдущий ждёт блокировки сайта.
@@ -213,6 +215,68 @@ function recordResult(job, ok, code, durationMs, error) {
   store.save();
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function processAlive(pid, group = false) {
+  try {
+    process.kill(group ? -pid : pid, 0);
+    return true;
+  } catch (err) {
+    return err.code !== 'ESRCH';
+  }
+}
+
+async function waitGone(pid, group) {
+  const deadline = Date.now() + TREE_EXIT_WAIT_MS;
+  while (processAlive(pid, group)) {
+    if (Date.now() >= deadline) return false;
+    await delay(50);
+  }
+  return true;
+}
+
+/** Завершить shell вместе с потомками и подтвердить окончание до release лока.
+ *  На POSIX у cron своя группа процессов; на Windows ждём taskkill /T /F. */
+async function terminateTree(child) {
+  if (!child || !child.pid) return;
+  const pid = child.pid;
+  if (process.platform === 'win32') {
+    let taskkillOk = false;
+    try {
+      taskkillOk = await new Promise((resolve) => {
+        const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
+        killer.on('error', () => resolve(false));
+        killer.on('close', (code) => resolve(code === 0));
+      });
+    } catch {
+      taskkillOk = false;
+    }
+    if (!taskkillOk && processAlive(pid)) {
+      try { child.kill('SIGKILL'); } catch { /* уже мёртв */ }
+    }
+    if (!await waitGone(pid, false)) {
+      throw new Error(`дерево процессов ${pid} не завершилось после taskkill`);
+    }
+    return;
+  }
+
+  try { process.kill(-pid, 'SIGTERM'); } catch {
+    try { child.kill('SIGTERM'); } catch { /* уже мёртв */ }
+  }
+  const graceDeadline = Date.now() + KILL_GRACE_MS;
+  while (processAlive(pid, true) && Date.now() < graceDeadline) await delay(50);
+  if (processAlive(pid, true)) {
+    try { process.kill(-pid, 'SIGKILL'); } catch {
+      try { child.kill('SIGKILL'); } catch { /* уже мёртв */ }
+    }
+  }
+  if (!await waitGone(pid, true)) {
+    throw new Error(`группа процессов ${pid} не завершилась после SIGKILL`);
+  }
+}
+
 async function runJob(site, job, trigger = 'manual') {
   const dir = manager.siteDir(site);
   if (!fs.existsSync(dir)) {
@@ -226,38 +290,73 @@ async function runJob(site, job, trigger = 'manual') {
   // rename'ом — сериализуем, как это делают бэкапы.
   return withSiteLock(site.id, () => new Promise((resolve, reject) => {
     let output = '';
-    let killed = false;
-    // timeout у spawn убивает только прямой дочерний процесс — внуки могут
-    // пережить (та же оговорка, что у runCommand в manager; для cron-задач
-    // достаточно: типовые задачи — короткие скрипты и curl).
-    const child = spawn(job.command, {
-      shell: true,
-      cwd: dir,
-      windowsHide: true,
-      timeout: (job.timeoutSec || DEFAULT_TIMEOUT_SEC) * 1000,
-      env: { ...process.env, SITE_ID: site.id, SITEPANEL: '1', CRON_TRIGGER: trigger },
-    });
+    let child;
+    let finished = false;
+    let timedOut = false;
+    let timeoutTimer;
+    let termination = null;
+    let terminationError = null;
+
+    const finishOnce = ({ code = null, signal = null, spawnError = null, treeError = null } = {}) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeoutTimer);
+      const durationMs = Date.now() - t0;
+      const ok = !spawnError && !timedOut && code === 0;
+      const tail = output.trim().split('\n').slice(-8).join('\n').slice(0, 2000);
+      const label = trigger === 'scheduled' ? 'по расписанию' : 'вручную';
+      const failure = timedOut
+        ? `превышен таймаут${treeError ? `; завершение дерева не подтверждено: ${treeError.message}` : ''}`
+        : spawnError
+          ? spawnError.message
+          : signal
+            ? `сигнал ${signal}`
+            : `код выхода ${code}`;
+      manager.appendLog(site, `[cron] ${ts()} «${job.name}» (${label}): ${ok ? 'успех' : failure} за ${Math.round(durationMs / 100) / 10}с${tail ? '\n' + tail : ''}`);
+      recordResult(job, ok, timedOut ? null : code, durationMs, ok ? null : failure);
+      if (ok) resolve({ ok: true, code, durationMs, output: tail });
+      else if (spawnError) reject(spawnError);
+      else if (timedOut) reject(new Error('Превышен таймаут выполнения'));
+      else if (signal) reject(new Error(`Команда завершилась по сигналу ${signal}: ${tail.slice(0, 300)}`));
+      else reject(new Error(`Команда завершилась с кодом ${code}: ${tail.slice(0, 300)}`));
+    };
+
+    const finishAfterTermination = (details) => {
+      if (!timedOut || !termination) return finishOnce(details);
+      termination.then(
+        () => finishOnce({ ...details, treeError: terminationError }),
+        (err) => finishOnce({ ...details, treeError: err })
+      );
+    };
+
+    try {
+      child = spawn(job.command, {
+        shell: true,
+        cwd: dir,
+        // Своя группа: timeout должен завершить не только shell, но и потомков.
+        detached: process.platform !== 'win32',
+        windowsHide: true,
+        env: { ...process.env, SITE_ID: site.id, SITEPANEL: '1', CRON_TRIGGER: trigger },
+      });
+    } catch (err) {
+      finishOnce({ spawnError: err });
+      return;
+    }
+
+    timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      // Promise всегда resolve: close/error могут прийти раньше завершения
+      // эскалации, но rejected promise не должен стать unhandled до их прихода.
+      termination = terminateTree(child).catch((err) => { terminationError = err; });
+    }, (job.timeoutSec || DEFAULT_TIMEOUT_SEC) * 1000);
+    timeoutTimer.unref();
     const onChunk = (c) => {
       if (output.length < 100000) output += c;
     };
     child.stdout.on('data', onChunk);
     child.stderr.on('data', onChunk);
-    child.on('error', (err) => {
-      recordResult(job, false, null, Date.now() - t0, err.message);
-      reject(err);
-    });
-    child.on('close', (code, signal) => {
-      const durationMs = Date.now() - t0;
-      killed = signal === 'SIGTERM';
-      const ok = code === 0;
-      const tail = output.trim().split('\n').slice(-8).join('\n').slice(0, 2000);
-      const label = trigger === 'scheduled' ? 'по расписанию' : 'вручную';
-      const status = killed ? 'превышен таймаут' : ok ? 'успех' : `код выхода ${code}`;
-      manager.appendLog(site, `[cron] ${ts()} «${job.name}» (${label}): ${status} за ${Math.round(durationMs / 100) / 10}с${tail ? '\n' + tail : ''}`);
-      recordResult(job, ok && !killed, killed ? null : code, durationMs, killed ? 'превышен таймаут' : null);
-      if (ok && !killed) resolve({ ok: true, code, durationMs, output: tail });
-      else reject(new Error(killed ? 'Превышен таймаут выполнения' : `Команда завершилась с кодом ${code}: ${tail.slice(0, 300)}`));
-    });
+    child.on('error', (err) => finishAfterTermination({ spawnError: err }));
+    child.on('close', (code, signal) => finishAfterTermination({ code, signal }));
   }));
 }
 

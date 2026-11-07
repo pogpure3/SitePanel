@@ -36,6 +36,7 @@ function writeMarker(siteId, data) {
     fs.renameSync(tmp, file);
   } catch (err) {
     console.error(`[panel] не удалось записать маркер деплоя ${file}: ${err.message}`);
+    throw err;
   }
   return payload;
 }
@@ -113,6 +114,7 @@ function reconcile(sites, log) {
           actions.push({ siteId: String(marker.siteId), action: 'восстановлен каталог удалявшегося сайта из .backup' });
         } catch (err) {
           console.error(`[panel] не удалось вернуть каталог сайта ${marker.siteId}: ${err.message}`);
+          continue;
         }
       }
       removeMarker(marker.siteId);
@@ -122,8 +124,10 @@ function reconcile(sites, log) {
     const staging = marker.staging;
     if (!fs.existsSync(dir) && fs.existsSync(backup)) {
       // Случай B: каталога нет, бэкап есть — возвращаем прежнюю версию.
+      let recovered = false;
       try {
         fs.renameSync(backup, dir);
+        recovered = true;
         site.hasBackup = false;
         if (log) log(site, `[panel] незавершённый деплой: каталог восстановлен из ${path.basename(backup)} после аварийного завершения панели`);
         actions.push({ siteId: String(marker.siteId), action: 'каталог восстановлен из .backup' });
@@ -131,6 +135,7 @@ function reconcile(sites, log) {
         if (log) log(site, `[panel] НЕ удалось восстановить каталог из .backup: ${err.message}`);
         actions.push({ siteId: String(marker.siteId), action: 'восстановление не удалось: ' + err.message });
       }
+      if (!recovered) continue;
     } else if (fs.existsSync(dir) && fs.existsSync(backup)) {
       // Случай A/C: каталог на месте. Какой из них актуален — неизвестно точно,
       // поэтому НЕ удаляем бэкап: он единственная копия прежней версии.

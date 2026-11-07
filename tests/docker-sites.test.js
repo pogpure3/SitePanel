@@ -115,7 +115,12 @@ test('detectContainerPort: EXPOSE и короткий ports, длинный си
     'docker-compose.yml': [
       'services:',
       '  app:',
-      '    build: .',
+      '    build:',
+      '      context: .',
+      '      dockerfile: ./docker/Dockerfile',
+      '      additional_contexts:',
+      '        shared: ./shared',
+      '        base: docker-image://alpine:3',
       '    ports:',
       '      - "7011:7011"    # хвостовой комментарий — порт обязан детектиться',
       '',
@@ -147,10 +152,25 @@ test('validateComposeSafety: опасные конструкции отверг�
       '    volumes:',
       '      - ./data:/app/data',
       '      - db:/var/lib/db',
+      '    env_file:',
+      '      - ./config/app.env',
+      '      - path: ./config/optional.env',
+      '        required: false',
+      '    label_file: ./config/app.labels',
+      '    credential_spec:',
+      '      config: app_config',
+      '    configs: [app_config]',
+      '    secrets: [app_secret]',
       '  side:',
       '    image: redis:7',
       'volumes:',
       '  db: {}',
+      'configs:',
+      '  app_config:',
+      '    file: ./config/app.conf',
+      'secrets:',
+      '  app_secret:',
+      '    file: ./config/app.secret',
     ].join('\n'),
   });
   const res = validateComposeSafety(ok, 'docker-compose.yml');
@@ -163,11 +183,40 @@ test('validateComposeSafety: опасные конструкции отверг�
     ['pid: host', 'services:\n  a:\n    image: x\n    pid: host\n'],
     ['cap_add', 'services:\n  a:\n    image: x\n    cap_add: [SYS_ADMIN]\n'],
     ['devices', 'services:\n  a:\n    image: x\n    devices: ["/dev/sda:/dev/sda"]\n'],
+    ['use_api_socket', 'services:\n  a:\n    image: x\n    use_api_socket: true\n'],
+    ['use_api_socket false тоже не принимается', 'services:\n  a:\n    image: x\n    use_api_socket: false\n'],
+    ['volumes_from service', 'services:\n  a:\n    image: x\n    volumes_from: [db]\n  db:\n    image: postgres\n'],
+    ['volumes_from container', 'services:\n  a:\n    image: x\n    volumes_from: ["container:victim:rw"]\n'],
+    ['provider host binary', 'services:\n  a:\n    provider:\n      type: evil-helper\n'],
+    ['device_cgroup_rules', 'services:\n  a:\n    image: x\n    device_cgroup_rules: ["a *:* rwm"]\n'],
+    ['cgroup host', 'services:\n  a:\n    image: x\n    cgroup: host\n'],
+    ['uts host', 'services:\n  a:\n    image: x\n    uts: host\n'],
+    ['seccomp unconfined', 'services:\n  a:\n    image: x\n    security_opt: ["seccomp=unconfined"]\n'],
     ['абсолютный bind', 'services:\n  a:\n    image: x\n    volumes:\n      - /:/host\n'],
     ['docker.sock', 'services:\n  a:\n    image: x\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n'],
     ['bind наружу сайта', 'services:\n  a:\n    image: x\n    volumes:\n      - ../../etc:/etc\n'],
     ['build.context вне сайта', 'services:\n  a:\n    build:\n      context: ../../..\n'],
+    ['build.context Windows absolute', 'services:\n  a:\n    build:\n      context: C:\\\\host\\\\project\n'],
+    ['build.dockerfile абсолютный', 'services:\n  a:\n    build:\n      context: .\n      dockerfile: /opt/sitepanel/panel.env\n'],
+    ['build.dockerfile наружу сайта', 'services:\n  a:\n    build:\n      context: ./deploy\n      dockerfile: ../../../panel.env\n'],
+    ['additional_contexts абсолютный', 'services:\n  a:\n    build:\n      context: .\n      additional_contexts:\n        host: /\n'],
+    ['additional_contexts file URL', 'services:\n  a:\n    build:\n      context: .\n      additional_contexts:\n        host: file:///\n'],
+    ['additional_contexts наружу сайта', 'services:\n  a:\n    build:\n      context: .\n      additional_contexts:\n        - host=../../..\n'],
     ['external сеть', 'networks:\n  hostnet:\n    external: true\nservices:\n  a:\n    image: x\n'],
+    ['volume driver', 'volumes:\n  root:\n    driver: local\nservices:\n  a:\n    image: x\n    volumes: [root:/host]\n'],
+    ['volume driver_opts bind корня', 'volumes:\n  root:\n    driver_opts:\n      type: none\n      o: bind\n      device: /\nservices:\n  a:\n    image: x\n    volumes: [root:/host]\n'],
+    ['external volume', 'volumes:\n  victim:\n    external: true\nservices:\n  a:\n    image: x\n    volumes: [victim:/data]\n'],
+    ['volume с глобальным name', 'volumes:\n  victim:\n    name: other-project-data\nservices:\n  a:\n    image: x\n    volumes: [victim:/data]\n'],
+    ['абсолютный env_file', 'services:\n  a:\n    image: x\n    env_file: /opt/sitepanel/panel.env\n'],
+    ['env_file наружу сайта', 'services:\n  a:\n    image: x\n    env_file:\n      - path: ../../panel.env\n        required: false\n'],
+    ['label_file наружу сайта', 'services:\n  a:\n    image: x\n    label_file: ../../panel.env\n'],
+    ['credential_spec file наружу сайта', 'services:\n  a:\n    image: x\n    credential_spec:\n      file: ../../panel.json\n'],
+    ['credential_spec registry', 'services:\n  a:\n    image: x\n    credential_spec:\n      registry: host-credential\n'],
+    ['config file наружу сайта', 'configs:\n  panel:\n    file: ../../panel.env\nservices:\n  a:\n    image: x\n    configs: [panel]\n'],
+    ['secret file абсолютный', 'secrets:\n  panel:\n    file: /opt/sitepanel/panel.env\nservices:\n  a:\n    image: x\n    secrets: [panel]\n'],
+    ['env_file Windows absolute', 'services:\n  a:\n    image: x\n    env_file: C:\\\\sitepanel\\\\panel.env\n'],
+    ['Windows absolute bind', 'services:\n  a:\n    image: x\n    volumes:\n      - C:\\\\host:/host\n'],
+    ['external secret', 'secrets:\n  victim:\n    external: true\nservices:\n  a:\n    image: x\n    secrets: [victim]\n'],
     ['include', 'include:\n  - other.yml\nservices:\n  a:\n    image: x\n'],
     ['битый YAML', 'services: [ Broken\n'],
     ['нет services', 'version: "3"\n'],
@@ -176,6 +225,27 @@ test('validateComposeSafety: опасные конструкции отверг�
     const dir = makeProjectDir(t, { 'docker-compose.yml': content });
     assert.throws(() => validateComposeSafety(dir, 'docker-compose.yml'), /compose отклонён/, `должен быть отказ: ${label}`);
   }
+});
+
+test('validateComposeSafety: относительный путь через symlink наружу сайта отвергается', (t) => {
+  const { validateComposeSafety } = require('../src/sites/manager');
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-docker-outside-'));
+  t.after(() => { try { fs.rmSync(outside, { recursive: true, force: true }); } catch { /* noop */ } });
+  fs.writeFileSync(path.join(outside, 'panel.env'), 'SMTP_PASS=secret\n');
+  const dir = makeProjectDir(t, {
+    'docker-compose.yml': 'services:\n  app:\n    image: x\n    env_file: ./escape/panel.env\n',
+  });
+  try {
+    fs.symlinkSync(outside, path.join(dir, 'escape'), 'junction');
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') return t.skip('ОС не разрешает создать symlink/junction');
+    throw err;
+  }
+  assert.throws(
+    () => validateComposeSafety(dir, 'docker-compose.yml'),
+    /compose отклонён/,
+    'realpath должен отсеять symlink на внешний каталог'
+  );
 });
 
 test('composeFirstService: первый сервис верхнего уровня, вложенность игнорируется', () => {

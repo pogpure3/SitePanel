@@ -15,7 +15,8 @@ function siteRowHtml(s) {
   return `<tr class="site-row" data-id="${s.id}">
     <td>
       <div class="site-name-cell">
-        <span class="status-dot"></span>
+        <span class="status-dot" aria-hidden="true"></span>
+        <span class="sr-only site-status-text"></span>
         <div style="min-width:0">
           <div class="site-name"><span class="site-title"></span>
             <span class="badge type"></span>
@@ -31,10 +32,10 @@ function siteRowHtml(s) {
     <td class="cell-updated cell-dim" data-label="Обновлён"></td>
     <td>
       <div class="row-actions">
-        <button class="btn btn-sm btn-success act-start" title="Запустить">▶</button>
-        <button class="btn btn-sm act-stop" title="Остановить">⏹</button>
-        <button class="btn btn-sm act-restart" title="Перезапустить">🔄</button>
-        <a class="btn btn-sm act-visit" title="Перейти на сайт" target="_blank" rel="noopener">🌐</a>
+        <button class="btn btn-sm btn-success act-start" title="Запустить" aria-label="Запустить ${esc(s.name)}">▶</button>
+        <button class="btn btn-sm act-stop" title="Остановить" aria-label="Остановить ${esc(s.name)}">⏹</button>
+        <button class="btn btn-sm act-restart" title="Перезапустить" aria-label="Перезапустить ${esc(s.name)}">🔄</button>
+        <a class="btn btn-sm act-visit" title="Перейти на сайт" aria-label="Перейти на сайт ${esc(s.name)}" target="_blank" rel="noopener">🌐</a>
         <button class="btn btn-sm" data-open>Открыть</button>
       </div>
     </td>
@@ -141,6 +142,7 @@ function patchRow(row, s) {
   const dot = row.querySelector('.status-dot');
   dot.className = 'status-dot ' + (s.status || '');
   dot.title = statusLabelFull(s.status, s);
+  row.querySelector('.site-status-text').textContent = `Статус: ${statusLabelFull(s.status, s)}`;
 
   row.querySelector('.site-title').textContent = s.name;
   row.querySelector('.badge.type').textContent = typeLabel(s.type);

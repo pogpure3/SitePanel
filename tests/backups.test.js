@@ -85,7 +85,7 @@ test('ручной бэкап: zip на диске, sidecar-метаданные
   const r = await api(panel, 'POST', `/api/sites/${site.id}/backups`);
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal(r.data.ok, true);
-  assert.match(r.data.backup.name, /^\d{8}-\d{6}\.zip$/);
+  assert.match(r.data.backup.name, /^\d{8}-\d{6}(?:-\d{3})?\.zip$/);
 
   const bdir = path.resolve(backupsDirOf(panel, site.id));
   const zipPath = path.resolve(bdir, r.data.backup.name);
@@ -266,6 +266,68 @@ test('PANEL_BACKUPS=0 выключает планировщик целиком',
   await sleep(3000);
   const list = await api(panel, 'GET', `/api/sites/${site.id}/backups`);
   assert.equal(list.data.totals.count, 0, 'плановых бэкапов нет');
+});
+
+test('ручное удаление не сообщает успех, если архив удалить не удалось', async () => {
+  const backups = require('../src/sites/backups');
+  const { config } = require('../src/config');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sitepanel-bk-delete-'));
+  const previous = config.backupsDir;
+  config.backupsDir = root;
+  const site = { id: 'locked-backup' };
+  const dir = backups.backupDir(site);
+  const name = '20260101-000000.zip';
+  const zipPath = path.join(dir, name);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(zipPath, 'zip');
+
+  const rmSync = fs.rmSync;
+  fs.rmSync = (target, options) => {
+    if (target === zipPath) {
+      const err = new Error('access denied');
+      err.code = 'EACCES';
+      throw err;
+    }
+    return rmSync(target, options);
+  };
+  try {
+    await assert.rejects(backups.deleteBackup(site, name), { code: 'EACCES' });
+    assert.equal(fs.existsSync(zipPath), true);
+  } finally {
+    fs.rmSync = rmSync;
+    config.backupsDir = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('имя бэкапа не перезаписывает архив, созданный в ту же секунду', (t) => {
+  const backups = require('../src/sites/backups');
+  const { config } = require('../src/config');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sitepanel-bk-name-'));
+  const previous = config.backupsDir;
+  config.backupsDir = root;
+  t.after(() => {
+    config.backupsDir = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const site = { id: 'same-second' };
+  const dir = backups.backupDir(site);
+  fs.mkdirSync(dir, { recursive: true });
+  const d = new Date(2026, 0, 2, 3, 4, 5);
+  fs.writeFileSync(path.join(dir, '20260102-030405-site.zip'), 'first');
+  assert.equal(backups.availableName(site, 'site', d), '20260102-030405-001-site.zip');
+  fs.writeFileSync(path.join(dir, '20260102-030405-001-site.zip'), 'second');
+  assert.equal(backups.availableName(site, 'site', d), '20260102-030405-002-site.zip');
+
+  const oldName = '20260102-030405-site.zip';
+  const newName = '20260102-030405-001-site.zip';
+  fs.writeFileSync(path.join(dir, oldName + '.json'), JSON.stringify({ createdAt: 100 }));
+  fs.writeFileSync(path.join(dir, newName + '.json'), JSON.stringify({ createdAt: 101 }));
+  assert.equal(backups.listBackups(site)[0].name, newName, 'новый архив с суффиксом отсортирован как старый');
+  backups.prune(site, 1);
+  assert.equal(fs.existsSync(path.join(dir, newName)), true, 'ротация удалила новый архив');
+  assert.equal(fs.existsSync(path.join(dir, oldName)), false, 'ротация оставила старый архив');
 });
 
 test('удаление сайта удаляет и его бэкапы', async (t) => {

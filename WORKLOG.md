@@ -8,6 +8,58 @@
 
 ---
 
+## 2026-11-07 — Полный ECC-аудит безопасности, устойчивости и UI/UX
+
+**Запрос.** Проанализировать SitePanel с нуля силами ECC-агентов и улучшить
+безопасность, устойчивость, производительность и UI/UX.
+
+**Диагностика.** ECC-агенты `architect`, `security-reviewer`,
+`silent-failure-hunter` и `a11y-architect` проверили архитектуру, trust
+boundaries, Docker Compose, auth/reset, deploy/rollback, cron, мониторинг,
+бэкапы и браузерный UI. Подтверждены: Docker escape через host-path/volume/build
+настройки; fail-open Basic при ошибке scrypt; нетранзакционная смена пароля;
+потеря recovery-маркера при сбое `rename`; осиротевшие cron-процессы;
+последовательный health-check; коллизии и ложное удаление бэкапов; недоступное
+мобильное меню, файловый менеджер и overflow на 320 px. `npm audit` до правок
+показал 4 high и 4 moderate уязвимости. Базовый полный прогон дал 234 passed,
+3 failed и 21 skipped; те же Windows-сценарии `T-32`, `T-43`, `T-44` падали
+до изменений этой задачи.
+
+**Изменения.** В `D:\Projects\SitePanel\src\sites\docker.js` закрыты опасные
+Compose volumes, host file paths, build contexts и symlink escape. В
+`D:\Projects\SitePanel\src\httpserver.js`, `src\auth.js` и
+`src\password-reset.js` добавлены fail-closed proxy-auth и durable commit
+пароля. В `src\sites\deploymark.js` и `src\sites\manager.js` исправлены
+recovery-маркеры, возврат каталога, ожидание Git `taskkill` и штатное завершение
+деревьев сайтов с освобождением портов. В `src\sites\cron.js` таймаут завершает
+дерево процессов до release лока и пишет один результат. `src\monitor.js`
+проверяет до пяти сайтов параллельно. `src\sites\backups.js` исключает перезапись одноимённых
+архивов, правильно сортирует их для ротации и сообщает ошибку ручного удаления.
+В `src\admin\public\` исправлены мобильное меню, ARIA-состояния SPA,
+клавиатурный файловый менеджер, секретное поле Git token, доступные имена
+действий, фокус login/reset и overflow таблиц/дашборда. `package-lock.json`
+обновлён совместимыми security-релизами без `--force`. Добавлены и расширены
+регрессии в `D:\Projects\SitePanel\tests\`. Серверы и размещённые сайты не
+изменялись; резервные копии не создавались, потому что правки только локальные
+и остаются в Git working tree.
+
+**Проверка.** `npm run lint` — успешно. Целевой backend/UI/security набор:
+48 passed, 8 Docker-only skipped, 0 failed. Отдельно cron/monitor/deploy marker:
+16 passed, 2 POSIX-only skipped, 0 failed. Playwright проверил клавиатуру и
+viewport 320 px. Итоговый полный `npm test`: 249 passed, 0 failed, 21 skipped;
+включая исправленные Windows-сценарии `T-32`, `T-43` и `T-44`.
+`npm audit --omit=dev`:
+0 critical/high, 3 moderate в неиспользуемой glob-ветке
+`archiver -> readdir-glob -> minimatch`. `git diff --check` — успешно.
+
+**Осталось.** Деплой не выполнялся. Docker integration пропущен без Docker CLI.
+Архитектурный риск сохраняется:
+Node-сайты и панель работают под одним OS-пользователем; полная изоляция требует
+миграции на отдельные UID/контейнеры. Также отложены: ограниченный async-обход
+сотен тысяч файлов при бэкапе, ротация внешних SSH-копий, лимит manifest импорта,
+rate-limit reset/login за proxy и аварийный exit после `uncaughtException`.
+
+
 
 ## 2026-11-03 — Четыре улучшения из разбора BeAdmin: свой SSL, cron, внешние бэкапы, перенос
 

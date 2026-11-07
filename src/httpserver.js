@@ -419,7 +419,22 @@ async function stripPanelAuthorization(req) {
   if (!parsed) return;
   try {
     if (await auth.checkCredentials(parsed.user, parsed.pass)) delete req.headers.authorization;
-  } catch { /* не учётка панели — уходит в сайт как есть */ }
+  } catch (err) {
+    // Ошибка scrypt/пула — это НЕ доказательство, что заголовок принадлежит
+    // сайту. Fail-open здесь отдавал возможный пароль панели размещённому коду.
+    // Удаляем секрет даже для страховки от ошибочного продолжения вызывающего.
+    delete req.headers.authorization;
+    throw err;
+  }
+}
+
+function rejectProxyAuthorization(res, err) {
+  console.error('[httpserver] не удалось проверить Authorization перед проксированием:', err && err.message ? err.message : err);
+  if (!res || res.headersSent || res.writableEnded) {
+    try { if (res && res.destroy) res.destroy(); } catch { /* уже закрыт */ }
+    return;
+  }
+  sendPlaceholder(res, 503, '503 — сайт временно недоступен', 'Не удалось безопасно проверить данные авторизации. Повторите запрос позже.');
 }
 
 function proxyToNode(site, req, res, host) {
@@ -434,16 +449,17 @@ function proxyToNode(site, req, res, host) {
     return sendPlaceholder(res, 503, '503 — сайт недоступен', 'Внутренний порт сайта не задан. Переразверните сайт.');
   }
   sanitizeForwardHeaders(req, host);
-  stripPanelAuthorization(req)
-    .catch(() => {})
-    .then(() => {
+  return stripPanelAuthorization(req).then(
+    () => {
       proxy.web(req, res, { target: `http://127.0.0.1:${port}` }, (err) => {
         // Страховка на случай, если ошибка не дошла до общего обработчика.
         if (!err || !res || res.headersSent) return;
         res.writeHead(502, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(page('502 — приложение не отвечает', 'Сайт запущен, но приложение не отвечает на внутреннем порту.'));
       });
-    });
+    },
+    (err) => rejectProxyAuthorization(res, err)
+  );
 }
 
 function handleRequest(req, res, isHttps) {
@@ -590,29 +606,31 @@ function createServers() {
 
   // Websockets -> в node-приложения и docker-контейнеры (публикуются одинаково:
   // 127.0.0.1:<site.port>).
-  const routeUpgrade = (req, socket, head) => {
-    const site = store.getSiteByDomain(hostOf(req));
-    const port = site ? Number(site.port) : NaN;
-    if (!site || (site.type !== 'node' && site.type !== 'docker') || site.status !== 'running' || !Number.isInteger(port) || port <= 0) {
-      return socket.destroy();
-    }
-    // Кросс-сайтовый WS-апгрейд браузер помечает чужим Origin — не пускаем (H-21).
-    if (!originAllowed(req.headers.origin, site, hostOf(req))) {
-      return socket.destroy();
-    }
-    sanitizeForwardHeaders(req, hostOf(req));
-    // H-14 и для WS: закэшированный Basic панели не должен уходить в сайт
-    // (HTTP-путь чистит stripPanelAuthorization, апгрейд раньше пропускал).
-    stripPanelAuthorization(req)
-      .catch(() => {})
-      .then(() => {
-        proxy.ws(req, socket, head, { target: `http://127.0.0.1:${port}` });
-      });
-  };
   httpServer.on('upgrade', routeUpgrade);
   httpsServer.on('upgrade', routeUpgrade);
 
   return { httpServer, httpsServer };
+}
+
+function routeUpgrade(req, socket, head) {
+  const site = store.getSiteByDomain(hostOf(req));
+  const port = site ? Number(site.port) : NaN;
+  if (!site || (site.type !== 'node' && site.type !== 'docker') || site.status !== 'running' || !Number.isInteger(port) || port <= 0) {
+    return socket.destroy();
+  }
+  // Кросс-сайтовый WS-апгрейд браузер помечает чужим Origin — не пускаем (H-21).
+  if (!originAllowed(req.headers.origin, site, hostOf(req))) {
+    return socket.destroy();
+  }
+  sanitizeForwardHeaders(req, hostOf(req));
+  // H-14 и для WS: закэшированный Basic панели не должен уходить в сайт.
+  return stripPanelAuthorization(req).then(
+    () => proxy.ws(req, socket, head, { target: `http://127.0.0.1:${port}` }),
+    (err) => {
+      console.error('[httpserver] не удалось проверить Authorization перед WebSocket-проксированием:', err && err.message ? err.message : err);
+      try { socket.destroy(); } catch { /* уже закрыт */ }
+    }
+  );
 }
 
 function listenServers({ httpServer, httpsServer }) {
@@ -701,5 +719,9 @@ module.exports = {
   realInside,
   originAllowed,
   effectiveScheme,
+  // Для регрессий fail-closed Authorization; публичным API панели не являются.
+  _stripPanelAuthorization: stripPanelAuthorization,
+  _proxyToNode: proxyToNode,
+  _routeUpgrade: routeUpgrade,
 };
 

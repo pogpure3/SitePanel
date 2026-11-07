@@ -207,3 +207,20 @@ test('index.html: модалки и поля доступны', () => {
   assert.match(html, /<label class="sr-only" for="promptInput"/, 'у promptInput нет метки');
   assert.match(html, /aria-live="polite"/, 'у тостов нет aria-live');
 });
+
+test('навигация, секреты и файловый менеджер сохраняют a11y-контракты', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'src', 'admin', 'public', 'app.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'admin', 'public', 'index.html'), 'utf8');
+  const loginJs = fs.readFileSync(path.join(__dirname, '..', 'src', 'admin', 'public', 'login.js'), 'utf8');
+  const files = fs.readFileSync(path.join(__dirname, '..', 'src', 'admin', 'public', 'views-files.js'), 'utf8');
+  assert.match(html, /id="menuBtn"[^>]*aria-controls="sidebar"[^>]*aria-expanded="false"/);
+  assert.match(html, /<main id="app" aria-busy="false">/);
+  assert.match(html, /type="password" name="gitToken"[^>]*autocomplete="new-password"/);
+  assert.match(app, /setAttribute\('aria-current', 'page'\)/);
+  assert.match(app, /app\.setAttribute\('aria-busy', 'true'\)/);
+  assert.match(app, /setSidebarOpen\(false, true\)/);
+  assert.match(loginJs, /focusTarget\.focus\(\)/);
+  assert.match(files, /<button type="button" data-crumb=/);
+  assert.match(files, /class="fm-name-button" data-(?:nav|edit-file)=/);
+  assert.match(files, /class="table-scroll"/);
+});

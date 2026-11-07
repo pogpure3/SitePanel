@@ -90,6 +90,19 @@ test('UI: дашборд, hash-роутинг, домены, health-полоск
   await page.waitForSelector('#detailRoot', { timeout: 10000 });
   assert.equal(await page.locator('#dName').textContent(), 'uisite', 'имя сайта не отрисовано');
 
+  // Файловый менеджер: имена и breadcrumbs — нативные кнопки, Enter открывает файл.
+  await page.goto(panel.base + '/#/sites/' + site.id + '/files');
+  const fileControl = page.locator('[data-edit-file]').first();
+  await fileControl.waitFor({ timeout: 10000 });
+  assert.equal(await fileControl.evaluate((el) => el.tagName), 'BUTTON', 'имя файла не является кнопкой');
+  assert.equal(await page.locator('#fmCrumbs [data-crumb]').first().evaluate((el) => el.tagName), 'BUTTON', 'breadcrumb не является кнопкой');
+  await fileControl.focus();
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => !globalThis.document.querySelector('#editModal').classList.contains('hidden'));
+  await page.keyboard.press('Escape');
+  await page.goto(panel.base + '/#/sites/' + site.id);
+  await page.waitForSelector('#detailRoot', { timeout: 10000 });
+
   // U-08: домены видны и отвязываются кнопкой.
   const domainRow = page.locator('#domainList .domain-row', { hasText: 'uisite.local' });
   await domainRow.waitFor({ timeout: 10000 });
@@ -136,6 +149,36 @@ test('UI: дашборд, hash-роутинг, домены, health-полоск
   await page.waitForTimeout(4500); // больше двух интервалов автообновления
   assert.ok(logRequests <= afterManual + 1, `таймер логов тикает после ухода со страницы: +${logRequests - afterManual} (U-09)`);
 
+  assert.deepEqual(consoleErrors, [], `ошибки в консоли браузера: ${consoleErrors.slice(0, 3)}`);
+});
+
+test('UI: мобильная навигация и страницы не расширяют viewport 320px', { timeout: 60000 }, async (t) => {
+  if (!chromium) return t.skip('playwright не установлен (npm i -D playwright && npx playwright install chromium)');
+  const panel = await startPanel();
+  const { page, consoleErrors } = await withBrowser(t, panel);
+  await page.setViewportSize({ width: 320, height: 800 });
+
+  await page.goto(panel.base + '/#/', { waitUntil: 'networkidle' });
+  await page.waitForSelector('.dash-grid');
+  assert.equal(await page.locator('#dashBtn').getAttribute('aria-current'), 'page');
+  assert.equal(await page.locator('#app').getAttribute('aria-busy'), 'false');
+  assert.ok(await page.evaluate(() => globalThis.document.documentElement.scrollWidth <= globalThis.innerWidth), 'дашборд создаёт горизонтальный скролл');
+
+  const menu = page.locator('#menuBtn');
+  assert.equal(await menu.getAttribute('aria-controls'), 'sidebar');
+  assert.equal(await menu.getAttribute('aria-expanded'), 'false');
+  await menu.click();
+  assert.equal(await menu.getAttribute('aria-expanded'), 'true');
+  assert.equal(await page.locator('.main-wrap').evaluate((el) => el.inert), true, 'фон drawer остаётся доступен с клавиатуры');
+  await page.keyboard.press('Escape');
+  assert.equal(await menu.getAttribute('aria-expanded'), 'false');
+  assert.equal(await page.locator('.main-wrap').evaluate((el) => el.inert), false, 'фон drawer остался inert после закрытия');
+  assert.equal(await page.evaluate(() => globalThis.document.activeElement.id), 'menuBtn', 'фокус не вернулся к кнопке меню');
+
+  await page.goto(panel.base + '/#/runtimes', { waitUntil: 'networkidle' });
+  await page.waitForSelector('#rtTable tbody tr');
+  assert.equal(await page.locator('#runtimesBtn').getAttribute('aria-current'), 'page');
+  assert.ok(await page.evaluate(() => globalThis.document.documentElement.scrollWidth <= globalThis.innerWidth), 'ресурсы создают горизонтальный скролл');
   assert.deepEqual(consoleErrors, [], `ошибки в консоли браузера: ${consoleErrors.slice(0, 3)}`);
 });
 

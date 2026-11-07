@@ -720,14 +720,37 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); }
 .fm-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .crumbs { font-size: 13px; color: var(--text-dim); word-break: break-all; }
 /* Ссылка — акцентный тон: --primary на карточке читается хуже акцентного. */
-.crumbs a { color: var(--accent); cursor: pointer; text-decoration: none; }
-.crumbs a:hover { text-decoration: underline; }
+.crumbs button {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: none;
+}
+.crumbs button:hover { text-decoration: underline; }
 
+.table-scroll { width: 100%; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-scroll > table { min-width: max-content; }
 .fm-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .fm-table th { text-align: left; color: var(--text-dim); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .fm-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .fm-table tbody tr:hover td { background: var(--bg-hover); }
-.fm-name { cursor: pointer; word-break: break-all; }
+.fm-name { word-break: break-all; }
+.fm-name-button {
+  appearance: none;
+  border: 0;
+  padding: 2px 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  word-break: break-all;
+}
+.fm-name-button:hover { color: var(--accent); text-decoration: underline; }
 .fm-actions button, .fm-actions a { min-width: 26px; min-height: 26px; }
 .fm-actions { white-space: nowrap; text-align: right; }
 .fm-actions button, .fm-actions a {
@@ -756,10 +779,12 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); }
 
 .dash-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
   gap: 14px;
 }
 .dash-card { margin-bottom: 0; }
+.dash-card .hint { overflow-wrap: anywhere; }
+.dash-card code { white-space: normal; overflow-wrap: anywhere; }
 .dash-row { display: flex; align-items: center; gap: 16px; }
 .dash-facts { flex: 1; min-width: 0; }
 /* Модель CPU — в одну строку: перенос делал текстовый блок выше «Памяти» и

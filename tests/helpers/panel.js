@@ -105,7 +105,7 @@ async function startPanel(env = {}, opts = {}) {
       PANEL_LOGIN_FAIL_DELAY_MS: '0',
       ...env,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     windowsHide: true,
   });
 
@@ -191,7 +191,17 @@ async function startPanel(env = {}, opts = {}) {
     }
   };
 
-  return { adminPort, httpPort, httpsPort, dataDir, base, auth, stop, bootLog };
+  const shutdown = async () => {
+    if (child.exitCode !== null) return;
+    if (!child.connected) throw new Error('IPC-канал панели уже закрыт');
+    child.send({ type: 'sitepanel-shutdown' });
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`Панель не завершилась штатно за 20с:\n${out}`)), 20000);
+      child.once('exit', () => { clearTimeout(timer); resolve(); });
+    });
+  };
+
+  return { adminPort, httpPort, httpsPort, dataDir, base, auth, stop, shutdown, bootLog };
 }
 
 function sleep(ms) {

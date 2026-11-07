@@ -103,8 +103,12 @@ function confirmReset(token, password) {
   if (!crypto.timingSafeEqual(activeToken.hash, supplied)) {
     throw codedError('INVALID_TOKEN', 'Ссылка недействительна или устарела');
   }
+  // changePassword сначала атомарно пишет auth.json и только затем меняет память
+  // и сессии. Токен тоже гасим лишь после этого durable commit: при ENOSPC/EIO
+  // владелец сможет повторить сброс, а не останется без рабочей ссылки.
+  const result = auth.changePassword('', password);
   activeToken = null;
-  return auth.changePassword('', password);
+  return result;
 }
 
 module.exports = { requestReset, confirmReset };

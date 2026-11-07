@@ -69,7 +69,7 @@ function renderSite(site) {
         <h1><span class="status-dot" id="dStatusDot"></span> <span id="dName">${esc(site.name)}</span></h1>
         <span class="ssl-slot" id="dSslBadge"></span>
         <span class="loop-slot" id="dLoopBadge"></span>
-        <button class="btn btn-sm" id="renameSiteBtn" title="Переименовать сайт">✎</button>
+        <button class="btn btn-sm" id="renameSiteBtn" title="Переименовать сайт" aria-label="Переименовать сайт ${esc(site.name)}">✎</button>
       </div>
 
       <div class="detail-grid">

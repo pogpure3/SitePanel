@@ -13,6 +13,7 @@ let sitesCache = [];
 let pollTimer = null;
 let activeLogTimer = null; // автообновление логов на странице сайта
 let refreshSeq = 0;        // маркер свежести: устаревшие ответы не патчат DOM
+let renderSeq = 0;         // aria-busy снимает только последний запущенный render
 
 /* ---------- API ---------- */
 
@@ -597,12 +598,16 @@ function syncShell() {
   // Активный пункт меню: сайт, файлы и бэкапы подсвечивают «Сайты».
   const active = view.name === 'site' || view.name === 'files' || view.name === 'backups' ? 'list' : view.name;
   document.querySelectorAll('.nav-item[data-nav]').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.nav === active);
+    const isActive = btn.dataset.nav === active;
+    btn.classList.toggle('active', isActive);
+    if (isActive) btn.setAttribute('aria-current', 'page');
+    else btn.removeAttribute('aria-current');
   });
   document.getElementById('crumb').textContent = CRUMBS[view.name] || 'Панель';
   document.title = `${CRUMBS[view.name] || 'Панель'} — SitePanel`;
-  // На телефоне меню закрывается после выбора пункта.
-  document.body.classList.remove('sidebar-open');
+  // На телефоне меню закрывается после выбора пункта и возвращает фокус к кнопке.
+  const sidebarWasOpen = document.body.classList.contains('sidebar-open');
+  setSidebarOpen(false, sidebarWasOpen);
 }
 
 // Точечное обновление текущего вида без перестроения страницы.
@@ -655,6 +660,8 @@ async function render() {
   // Уходя со страницы терминала, гасим сессию: WS и shell не должны жить в фоне.
   if (view.name !== 'terminal') stopTerminal();
   syncShell();
+  const seq = ++renderSeq;
+  app.setAttribute('aria-busy', 'true');
   const v = view; // пока грузим данные, вид могли сменить — старый ответ не рисуем
   try {
     if (v.name === 'list') {
@@ -691,6 +698,8 @@ async function render() {
       return;
     }
     showBanner('Не удалось загрузить данные: ' + err.message);
+  } finally {
+    if (seq === renderSeq) app.setAttribute('aria-busy', 'false');
   }
 }
 
@@ -754,11 +763,34 @@ document.getElementById('collapseBtn').addEventListener('click', () => {
 });
 try { if (localStorage.getItem('sp-sidebar') === '1') document.body.classList.add('sidebar-collapsed'); } catch { /* noop */ }
 
-document.getElementById('menuBtn').addEventListener('click', () => {
-  document.body.classList.toggle('sidebar-open');
+const menuButton = document.getElementById('menuBtn');
+const sidebar = document.getElementById('sidebar');
+const mainWrap = document.querySelector('.main-wrap');
+
+function setSidebarOpen(open, returnFocus = false) {
+  document.body.classList.toggle('sidebar-open', open);
+  menuButton.setAttribute('aria-expanded', String(open));
+  menuButton.setAttribute('aria-label', open ? 'Закрыть меню' : 'Открыть меню');
+  if (open) {
+    mainWrap.inert = true;
+    const current = sidebar.querySelector('[aria-current="page"]') || sidebar.querySelector('.nav-item');
+    current?.focus();
+  } else {
+    mainWrap.inert = false;
+    if (returnFocus) menuButton.focus();
+  }
+}
+
+menuButton.addEventListener('click', () => {
+  setSidebarOpen(!document.body.classList.contains('sidebar-open'));
 });
 document.getElementById('sidebarBackdrop').addEventListener('click', () => {
-  document.body.classList.remove('sidebar-open');
+  setSidebarOpen(false, true);
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || !document.body.classList.contains('sidebar-open')) return;
+  event.preventDefault();
+  setSidebarOpen(false, true);
 });
 
 document.getElementById('addSiteBtn').addEventListener('click', () => {

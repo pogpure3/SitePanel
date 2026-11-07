@@ -28,7 +28,9 @@ const manager = require('./manager');
 const alerts = require('../alerts');
 const { withSiteLock } = require('./lock');
 
-const NAME_RE = /^\d{8}-\d{6}(?:-(?:site|database))?\.zip$/;
+// Старые имена без счётчика остаются валидными. Три цифры добавляются только
+// при повторном бэкапе в ту же секунду, чтобы архив не был перезаписан.
+const NAME_RE = /^\d{8}-\d{6}(?:-\d{3})?(?:-(?:site|database))?\.zip$/;
 const BACKUP_SCOPES = new Set(['full', 'site', 'database']);
 const DEFAULT_SCHEDULE = { enabled: false, intervalHours: 24, keep: 5, scope: 'full', lastRunAt: null, lastError: null };
 
@@ -50,6 +52,18 @@ function stampName(scope, d = new Date()) {
   const p = (n) => String(n).padStart(2, '0');
   const suffix = scope === 'full' ? '' : `-${scope}`;
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}${suffix}.zip`;
+}
+
+function availableName(site, scope, d = new Date()) {
+  const base = stampName(scope, d);
+  if (!fs.existsSync(path.join(backupDir(site), base))) return base;
+  const suffix = scope === 'full' ? '' : `-${scope}`;
+  const stem = base.slice(0, base.length - suffix.length - 4);
+  for (let n = 1; n <= 999; n++) {
+    const candidate = `${stem}-${String(n).padStart(3, '0')}${suffix}.zip`;
+    if (!fs.existsSync(path.join(backupDir(site), candidate))) return candidate;
+  }
+  throw new Error('Слишком много бэкапов создано за одну секунду');
 }
 
 function normalizeScope(scope) {
@@ -203,7 +217,6 @@ async function _createBackup(site, trigger, scope) {
 
 /** Упаковка каталога сайта в zip (без управления контейнерами). */
 async function packSiteBackup(site, dir, { trigger, t0, scope }) {
-  const name = stampName(scope);
   const tmpZip = path.join(config.tmpDir, `backup-${site.id}-${Date.now()}.zip`);
   // Потоковая упаковка (archiver): архив пишется на диск напрямую, память не
   // растёт с сайтом (in-memory adm-zip мёржил RSS на 512 МБ × сайтов).
@@ -216,6 +229,7 @@ async function packSiteBackup(site, dir, { trigger, t0, scope }) {
     throw err;
   }
   fs.mkdirSync(backupDir(site), { recursive: true });
+  const name = availableName(site, scope);
   const stats = { files: 0, bytes: 0 };
   try {
     const archive = new ZipArchive({ zlib: { level: 9 } });
@@ -314,8 +328,20 @@ function listBackups(site) {
       out.push({ name, ts: st.mtimeMs, sizeBytes: st.size, ...readMeta(site, name) });
     } catch { /* исчез при чтении — пропускаем */ }
   }
-  out.sort((a, b) => b.name.localeCompare(a.name));
+  // Суффикс -001 появляется у второго архива той же секунды и лексически идёт
+  // раньше имени без суффикса. Сортируем по фактическому времени создания,
+  // иначе prune(keep=1) удалял только что созданный архив.
+  out.sort((a, b) => {
+    const byCreated = (Number(b.createdAt) || b.ts) - (Number(a.createdAt) || a.ts);
+    if (byCreated) return byCreated;
+    return backupSequence(b.name) - backupSequence(a.name);
+  });
   return out;
+}
+
+function backupSequence(name) {
+  const match = /^\d{8}-\d{6}-(\d{3})(?:-(?:site|database))?\.zip$/.exec(name);
+  return match ? Number(match[1]) : 0;
 }
 
 function backupScope(site, name) {
@@ -327,8 +353,11 @@ function backupScope(site, name) {
 function deleteBackup(site, name) {
   assertBackupName(name);
   return withSiteLock(site.id, () => {
-    resolveBackupPath(site, name);
-    tryRemove(site, name);
+    const zipPath = resolveBackupPath(site, name);
+    // Ручное удаление должно сообщить EACCES/EBUSY клиенту. Иначе UI показывал
+    // успех, хотя архив оставался на диске и продолжал занимать место.
+    fs.rmSync(zipPath);
+    try { fs.rmSync(metaFile(site, name), { force: true }); } catch { /* sidecar не влияет на список */ }
     return { ok: true };
   });
 }
@@ -607,6 +636,8 @@ module.exports = {
   scheduleOf,
   normalizeScheduleInput,
   normalizeScope,
+  availableName,
+  prune,
   normalizeRemoteInput,
   createBackup,
   listBackups,

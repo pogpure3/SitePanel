@@ -45,8 +45,17 @@ function siteLogFile(site) {
  */
 function taskkillTree(pid) {
   const n = Number(pid);
-  if (!Number.isInteger(n) || n <= 0 || n > 2147483647) return;
-  spawn('taskkill', ['/pid', String(n), '/T', '/F'], { windowsHide: true });
+  if (!Number.isInteger(n) || n <= 0 || n > 2147483647) return Promise.resolve();
+  return new Promise((resolve) => {
+    const killer = spawn('taskkill', ['/pid', String(n), '/T', '/F'], {
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    // taskkill returns a non-zero code when the process has already exited; for
+    // shutdown purposes that is the desired end state too.
+    killer.once('error', () => resolve());
+    killer.once('close', () => resolve());
+  });
 }
 
 /* ---------- Логи ---------- */
@@ -209,16 +218,17 @@ function aliveEntry(p) {
 // Гасит процесс вместе с деревом потомков. Дети сайтов запускаются в отдельной
 // группе процессов (detached), поэтому недостаточно убить только оболочку `sh`.
 function killTree(child, signal = 'SIGKILL') {
-  if (!child) return;
+  if (!child) return Promise.resolve();
   try {
     if (process.platform === 'win32') {
-      taskkillTree(child.pid);
+      return taskkillTree(child.pid);
     } else {
       process.kill(-child.pid, signal);
     }
   } catch {
     try { child.kill(signal); } catch { /* уже мёртв */ }
   }
+  return Promise.resolve();
 }
 
 /**
@@ -1142,7 +1152,9 @@ async function finalizeDeploy(site, staging, opts = {}) {
     fs.rmSync(staging, { recursive: true, force: true });
     throw err;
   } finally {
-    deploymark.removeMarker(site.id);
+    // Если каталог отсутствует, маркер нужен следующему boot() для повторной
+    // попытки восстановления. Удалять его после неудачного rename опасно.
+    if (fs.existsSync(dir)) deploymark.removeMarker(site.id);
   }
 }
 
@@ -1155,16 +1167,37 @@ function swapWithBackup(site) {
   const backup = dir + '.backup';
   if (!fs.existsSync(backup)) return false;
   const broken = dir + '.broken';
+  const ownsMarker = !deploymark.readMarker(site.id);
+  let movedCurrent = false;
   try {
+    if (ownsMarker) {
+      deploymark.writeMarker(site.id, {
+        staging: null,
+        backup,
+        phase: 'backing-up',
+        hadDir: fs.existsSync(dir),
+        dir,
+      });
+    }
     fs.rmSync(broken, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
-    if (fs.existsSync(dir)) fs.renameSync(dir, broken);
+    if (fs.existsSync(dir)) {
+      fs.renameSync(dir, broken);
+      movedCurrent = true;
+    }
     fs.renameSync(backup, dir);
     // Сломанная версия остаётся рядом как .broken — но не вечно: TTL-уборка в
     // boot() сносит её, иначе каждый откат навсегда оставлял копию сайта (P-05).
     site.hasBackup = false;
+    if (ownsMarker) deploymark.removeMarker(site.id);
     return true;
   } catch (err) {
-    appendLog(site, `[panel] ${ts()} откат не удался: ${err.message}`);
+    let restoreError = null;
+    if (movedCurrent && !fs.existsSync(dir) && fs.existsSync(broken)) {
+      try { fs.renameSync(broken, dir); } catch (restoreErr) { restoreError = restoreErr; }
+    }
+    if (ownsMarker && fs.existsSync(dir)) deploymark.removeMarker(site.id);
+    appendLog(site, `[panel] ${ts()} откат не удался: ${err.message}` +
+      (restoreError ? `; исходный каталог не возвращён: ${restoreError.message}` : ''));
     return false;
   }
 }
@@ -1380,6 +1413,7 @@ function gitClone(url, branch, dest) {
     });
     let errOut = '';
     let settled = false;
+    let timingOut = false;
     let graceTimer = null;
     const finish = (err) => {
       if (settled) return;
@@ -1399,10 +1433,17 @@ function gitClone(url, branch, dest) {
       return new Error(('git clone: ' + msg).slice(0, 300));
     };
     const timer = setTimeout(() => {
-      killTree(child);
-      finish(new Error(
+      timingOut = true;
+      const timeoutError = new Error(
         `git clone: превышено время ожидания (${Math.round(GIT_CLONE_TIMEOUT_MS / 1000)} с) — клон прерван`
-      ));
+      );
+      // На Windows taskkill асинхронен. Ответ API нельзя завершать, пока дерево
+      // git ещё держит сокеты/pipe: иначе клиент иногда получает ECONNRESET
+      // вместо JSON-ошибки, а клон продолжает жить после освобождения блокировки.
+      killTree(child).then(
+        () => finish(timeoutError),
+        () => finish(timeoutError)
+      );
     }, GIT_CLONE_TIMEOUT_MS);
     child.stderr.on('data', (d) => { errOut += d.toString(); });
     child.on('error', (err) => {
@@ -1412,13 +1453,14 @@ function gitClone(url, branch, dest) {
     // Если потомок удержал pipe, `close` может не прийти вовсе — тогда
     // завершаем промис сами, иначе блокировка сайта останется занятой.
     child.on('exit', () => {
-      if (settled) return;
+      if (settled || timingOut) return;
       if (!graceTimer) {
         graceTimer = setTimeout(() => finish(failFromErrOut()), GIT_CLOSE_GRACE_MS);
         graceTimer.unref();
       }
     });
     child.on('close', (code) => {
+      if (timingOut) return;
       if (code === 0) return finish(null);
       finish(failFromErrOut());
     });
@@ -1834,6 +1876,56 @@ async function _removeSite(site) {
   fs.rmSync(siteLogFile(site) + '.old', { force: true });
 }
 
+/**
+ * Остановить процессы сайтов при завершении панели, сохранив их статусы для
+ * последующего boot(). В отличие от обычного stop(), эта операция не помечает
+ * сайты stopped, но обязательно ждёт завершения дерева и освобождения порта.
+ */
+async function shutdownProcesses() {
+  const tasks = [];
+  for (const site of store.state.sites) {
+    const entry = processes.get(site.id);
+    if (!entry) continue;
+    if (entry.restartTimer) clearTimeout(entry.restartTimer);
+    if (entry.cooldownTimer) clearTimeout(entry.cooldownTimer);
+    if (entry.stableTimer) clearTimeout(entry.stableTimer);
+    entry.stopping = true;
+
+    tasks.push((async () => {
+      const pid = entry.child ? entry.child.pid : entry.pid;
+      if (process.platform === 'win32') {
+        await taskkillTree(pid);
+      } else if (Number.isInteger(pid) && pid > 0) {
+        const pgid = Number.isInteger(entry.pgid) ? entry.pgid : pid;
+        try { process.kill(-pgid, 'SIGTERM'); } catch {
+          try { process.kill(pid, 'SIGTERM'); } catch { /* уже мёртв */ }
+        }
+        const deadline = Date.now() + 3000;
+        let groupAlive = true;
+        const checkGroup = () => {
+          try { process.kill(-pgid, 0); return true; } catch { return false; }
+        };
+        while ((groupAlive = checkGroup()) && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        // Лидер shell/npm может завершиться раньше потомка node. Проверяем
+        // группу целиком, а не только pid лидера, иначе порт останется занят.
+        if (groupAlive) {
+          try { process.kill(-pgid, 'SIGKILL'); } catch {
+            try { process.kill(pid, 'SIGKILL'); } catch { /* уже мёртв */ }
+          }
+        }
+      }
+
+      if (site.type === 'node' && site.port) {
+        const freed = await waitPortFree(site.port, 8000);
+        if (!freed) appendLog(site, `[panel] ${ts()} порт ${site.port} не освободился при остановке панели`);
+      }
+    })());
+  }
+  await Promise.all(tasks);
+}
+
 function getProcessInfo(site) {
   return processes.get(site.id) || null;
 }
@@ -1904,6 +1996,7 @@ module.exports = {
   setStatusIf,
   deployState,
   killActiveCommands,
+  shutdownProcesses,
   readLogTail,
   appendLog,
   getProcessInfo,

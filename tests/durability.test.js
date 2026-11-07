@@ -649,9 +649,14 @@ test('T-32: gitClone по повисшему адресу завершается
   // его не закроют, поэтому проверяется именно таймаут панели.
   const tarpit = net.createServer(() => { /* принять и молчать */ });
   const sockets = new Set();
+  const tarpitSocketErrors = [];
   tarpit.on('connection', (s) => {
     sockets.add(s);
     s.on('close', () => sockets.delete(s));
+    // taskkill /F на Windows сбрасывает TCP-соединение git с tarpit. Это ошибка
+    // проверяемого Git-сокета, не API панели; без обработчика node:test ошибочно
+    // приписывал этот ECONNRESET всему тесту до проверки HTTP-ответа.
+    s.on('error', (err) => tarpitSocketErrors.push(err));
   });
   await new Promise((resolve, reject) => {
     tarpit.once('error', reject);
@@ -710,7 +715,10 @@ test('T-32: gitClone по повисшему адресу завершается
   let res = null;
   let text = '';
   const outcome = await Promise.race([
-    pending.then(async (r) => ({ kind: 'answer', r, body: await r.text() })),
+    pending.then(
+      async (r) => ({ kind: 'answer', r, body: await r.text() }),
+      (error) => ({ kind: 'request-error', error })
+    ),
     sleep(SETTLE_DEADLINE_MS).then(() => ({ kind: 'hung' })),
   ]);
   const ms = Date.now() - t0;
@@ -726,6 +734,10 @@ test('T-32: gitClone по повисшему адресу завершается
   assert.notEqual(outcome.kind, 'hung',
     `панель не завершила висящий клон за ${SETTLE_DEADLINE_MS} мс: таймаут клонирования не срабатывает, ` +
     `блокировка сайта удерживается вечно и POST /api/sites/git не отвечает никогда`);
+  assert.notEqual(outcome.kind, 'request-error',
+    `панель сбросила API-соединение вместо JSON-ошибки: ${outcome.error && (outcome.error.cause || outcome.error)}`);
+  assert.ok(tarpitSocketErrors.every((err) => err && err.code === 'ECONNRESET'),
+    `tarpit получил неожиданную ошибку: ${tarpitSocketErrors.map((err) => err && (err.code || err.message)).join(', ')}`);
 
   let data = null;
   try { data = JSON.parse(text); } catch { /* не json */ }
@@ -1077,7 +1089,8 @@ test('T-43: завершение панели освобождает порт с
     // Штатное завершение (systemctl stop): панель обязана погасить дерево
     // процессов сайта, иначе следующий старт получит EADDRINUSE (SP-09).
     const pid = readPanelPid(panel.dataDir);
-    process.kill(pid, 'SIGTERM');
+    if (process.platform === 'win32') await panel.shutdown();
+    else process.kill(pid, 'SIGTERM');
     await waitProcessExit(pid, 20000);
     assert.equal(proc.isAlive(pid), false, 'панель не завершилась по SIGTERM');
 
@@ -1187,6 +1200,17 @@ test('T-44: исчезнувший каталог сайта даёт понят
 
   const dir = path.join(panel.dataDir, 'sites', site.id);
   assert.ok(fs.existsSync(dir), 'каталог сайта не создан');
+  // Windows запрещает удалять каталог, пока он является cwd живого процесса.
+  // Сначала штатно останавливаем сайт, затем проверяем тот же сценарий: каталог
+  // исчез между операциями, а restart обязан вернуть прикладную ошибку.
+  if (process.platform === 'win32') {
+    const stopped = await api(panel, 'POST', `/api/sites/${site.id}/stop`);
+    assert.equal(stopped.status, 200, `не удалось остановить сайт перед удалением каталога: ${stopped.text}`);
+    assert.equal(stopped.data.ok, true, `остановка сайта не удалась: ${JSON.stringify(stopped.data)}`);
+    await waitFor(async () => !(await proc.portBusy(site.port)), {
+      timeout: 15000, interval: 250, label: `порт ${site.port} освобождён перед удалением каталога`,
+    });
+  }
   rmrf(dir);
   assert.ok(!fs.existsSync(dir), 'каталог не удалён — тест проверяет не то');
 

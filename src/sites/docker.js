@@ -404,7 +404,163 @@ function composeFail(msg) {
 function resolvedInside(baseDir, fromDir, rel) {
   const resolved = path.resolve(fromDir, String(rel));
   const root = path.resolve(baseDir);
-  return resolved === root || resolved.startsWith(root + path.sep);
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) return false;
+
+  // Лексически безопасный путь всё ещё может пройти через symlink внутри сайта
+  // наружу. Разворачиваем ближайший существующий родитель: это работает и для
+  // ещё не созданного env/config-файла, и для build context.
+  let realRoot;
+  try { realRoot = fs.realpathSync(root); } catch { return false; }
+  let probe = resolved;
+  while (true) {
+    try {
+      const realProbe = fs.realpathSync(probe);
+      const realResolved = path.resolve(realProbe, path.relative(probe, resolved));
+      return realResolved === realRoot || realResolved.startsWith(realRoot + path.sep);
+    } catch (err) {
+      if (err.code !== 'ENOENT') return false;
+      const parent = path.dirname(probe);
+      if (parent === probe) return false;
+      probe = parent;
+    }
+  }
+}
+
+/** Путь Compose-файла обязан быть относительным и оставаться внутри сайта. */
+function validateComposeFilePath(siteDir, composeDir, value, label) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw composeFail(`${label}: ожидается непустой путь`);
+  }
+  const file = value.trim();
+  // path.isAbsolute зависит от ОС панели. Две дополнительные проверки не дают
+  // принять Windows-путь на Linux (и наоборот), а "~" Compose/shell может
+  // развернуть в домашний каталог пользователя панели.
+  const absolute = path.isAbsolute(file) || /^[A-Za-z]:[\\/]/.test(file) || /^\\\\/.test(file);
+  const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(file);
+  if (absolute || scheme || file.startsWith('~') || !resolvedInside(siteDir, composeDir, file)) {
+    throw composeFail(`${label} "${file}" вне каталога сайта запрещён`);
+  }
+  return file;
+}
+
+/** env_file: строка, список строк или long syntax [{path, required, format}]. */
+function validateEnvFiles(siteDir, composeDir, serviceName, envFile) {
+  if (envFile === undefined || envFile === null) return;
+  const entries = Array.isArray(envFile) ? envFile : [envFile];
+  for (const entry of entries) {
+    const file = typeof entry === 'string'
+      ? entry
+      : entry && typeof entry === 'object' && !Array.isArray(entry)
+        ? entry.path
+        : null;
+    validateComposeFilePath(siteDir, composeDir, file, `сервис ${serviceName}: env_file`);
+  }
+}
+
+/** label_file: строка или список файлов, как env_file без long syntax. */
+function validateLabelFiles(siteDir, composeDir, serviceName, labelFile) {
+  if (labelFile === undefined || labelFile === null) return;
+  const entries = Array.isArray(labelFile) ? labelFile : [labelFile];
+  for (const file of entries) {
+    validateComposeFilePath(siteDir, composeDir, file, `сервис ${serviceName}: label_file`);
+  }
+}
+
+/** Windows credential_spec не должен читать файл/registry хоста вне проекта. */
+function validateCredentialSpec(siteDir, composeDir, serviceName, spec) {
+  if (spec === undefined || spec === null) return;
+  if (typeof spec !== 'object' || Array.isArray(spec)) {
+    throw composeFail(`сервис ${serviceName}: credential_spec должен быть объектом`);
+  }
+  if (spec.registry !== undefined) {
+    throw composeFail(`сервис ${serviceName}: credential_spec.registry запрещён`);
+  }
+  if (spec.file !== undefined) {
+    const file = String(spec.file).replace(/^file:\/\//i, '');
+    validateComposeFilePath(siteDir, composeDir, file, `сервис ${serviceName}: credential_spec.file`);
+  }
+  // Compose допускает расширяемые протоколы credential_spec. Неизвестный
+  // протокол может снова делегировать чтение хосту; штатный config безопасен,
+  // потому что его top-level источник уже проверен выше.
+  const unknown = Object.keys(spec).filter((key) => key !== 'file' && key !== 'config');
+  if (unknown.length) {
+    throw composeFail(`сервис ${serviceName}: credential_spec.${unknown[0]} запрещён`);
+  }
+}
+
+/** URL/образ/другой сервис — не локальный путь на хосте. */
+function isRemoteComposeContext(value) {
+  return /^(?:https?|git|ssh):\/\//i.test(value) ||
+    /^docker-image:\/\//i.test(value) ||
+    /^service:[A-Za-z0-9_.-]+$/i.test(value);
+}
+
+/** build.additional_contexts: mapping или список name=source. */
+function validateAdditionalContexts(siteDir, composeDir, serviceName, contexts) {
+  if (contexts === undefined || contexts === null) return;
+  let sources;
+  if (Array.isArray(contexts)) {
+    sources = contexts.map((entry) => {
+      if (typeof entry !== 'string') return null;
+      const eq = entry.indexOf('=');
+      return eq > 0 ? entry.slice(eq + 1) : null;
+    });
+  } else if (typeof contexts === 'object') {
+    sources = Object.values(contexts);
+  } else {
+    throw composeFail(`сервис ${serviceName}: build.additional_contexts должен быть объектом или списком`);
+  }
+  for (const source of sources) {
+    if (typeof source !== 'string' || !source.trim()) {
+      throw composeFail(`сервис ${serviceName}: некорректный build.additional_contexts`);
+    }
+    const value = source.trim();
+    if (isRemoteComposeContext(value)) continue;
+    validateComposeFilePath(siteDir, composeDir, value, `сервис ${serviceName}: build.additional_contexts`);
+  }
+}
+
+/**
+ * Именованные volume без специальных настроек изолируются именем проекта.
+ * driver/driver_opts позволяют local-driver сделать bind /, external/name —
+ * подключить том другого проекта, поэтому эти варианты запрещены.
+ */
+function validateTopLevelVolumes(volumes) {
+  if (volumes === undefined || volumes === null) return;
+  if (typeof volumes !== 'object' || Array.isArray(volumes)) {
+    throw composeFail('секция volumes должна быть объектом');
+  }
+  for (const [name, volume] of Object.entries(volumes)) {
+    if (volume === null) continue;
+    if (typeof volume !== 'object' || Array.isArray(volume)) {
+      throw composeFail(`том ${name}: ожидается объект`);
+    }
+    for (const key of ['driver', 'driver_opts', 'external', 'name']) {
+      if (Object.prototype.hasOwnProperty.call(volume, key)) {
+        throw composeFail(`том ${name}: ${key} запрещён`);
+      }
+    }
+  }
+}
+
+/** configs/secrets: file разрешён только внутри дерева сайта; external/name — нет. */
+function validateTopLevelFiles(siteDir, composeDir, sectionName, definitions) {
+  if (definitions === undefined || definitions === null) return;
+  if (typeof definitions !== 'object' || Array.isArray(definitions)) {
+    throw composeFail(`секция ${sectionName} должна быть объектом`);
+  }
+  for (const [name, definition] of Object.entries(definitions)) {
+    if (!definition || typeof definition !== 'object' || Array.isArray(definition)) {
+      throw composeFail(`${sectionName}.${name}: ожидается объект`);
+    }
+    if (Object.prototype.hasOwnProperty.call(definition, 'external') ||
+        Object.prototype.hasOwnProperty.call(definition, 'name')) {
+      throw composeFail(`${sectionName}.${name}: external/name запрещены`);
+    }
+    if (definition.file !== undefined) {
+      validateComposeFilePath(siteDir, composeDir, definition.file, `${sectionName}.${name}.file`);
+    }
+  }
 }
 
 /**
@@ -415,7 +571,8 @@ function resolvedInside(baseDir, fromDir, rel) {
  *
  * Правила: ports не трогаем здесь (их заменяет override по всем сервисам);
  * запрещаем network_mode: host|container:*, privileged, pid/ipc/*ns_mode: host,
- * cap_add, devices, external-сети, include, extends на внешний файл,
+ * cap_add, devices, Docker API delegation, volumes_from, provider, external-сети,
+ * include, extends на внешний файл,
  * build.context и bind-источники volumes вне каталога сайта.
  * @returns {{services: object, names: string[]}}
  */
@@ -436,6 +593,9 @@ function validateComposeSafety(dir, relPath) {
 
   const composeDir = path.dirname(path.join(dir, relPath));
   if (doc.include) throw composeFail('include не поддерживается');
+  validateTopLevelVolumes(doc.volumes);
+  validateTopLevelFiles(dir, composeDir, 'configs', doc.configs);
+  validateTopLevelFiles(dir, composeDir, 'secrets', doc.secrets);
   if (doc.networks && typeof doc.networks === 'object' && !Array.isArray(doc.networks)) {
     for (const [netName, net] of Object.entries(doc.networks)) {
       if (net && typeof net === 'object' && net.external) {
@@ -451,24 +611,60 @@ function validateComposeSafety(dir, relPath) {
       throw composeFail(`сервис ${name}: network_mode "${nm}" запрещён`);
     }
     if (svc.privileged === true) throw composeFail(`сервис ${name}: privileged запрещён`);
-    for (const key of ['pid', 'ipc', 'cgroupns_mode', 'userns_mode']) {
+    for (const key of ['pid', 'ipc', 'cgroup', 'cgroupns_mode', 'userns_mode', 'uts']) {
       const v = svc[key];
       if (v === 'host' || (v && typeof v === 'object' && v.mode === 'host')) {
         throw composeFail(`сервис ${name}: ${key}: host запрещён`);
       }
     }
+    if (Object.prototype.hasOwnProperty.call(svc, 'use_api_socket')) {
+      throw composeFail(`сервис ${name}: use_api_socket запрещён`);
+    }
+    if (Object.prototype.hasOwnProperty.call(svc, 'volumes_from')) {
+      throw composeFail(`сервис ${name}: volumes_from запрещён`);
+    }
+    // provider.type запускается самим Compose как бинарник НА ХОСТЕ, вне контейнера.
+    if (Object.prototype.hasOwnProperty.call(svc, 'provider')) {
+      throw composeFail(`сервис ${name}: provider запрещён`);
+    }
     if (Array.isArray(svc.cap_add) && svc.cap_add.length) throw composeFail(`сервис ${name}: cap_add запрещён`);
     if (Array.isArray(svc.devices) && svc.devices.length) throw composeFail(`сервис ${name}: devices запрещён`);
+    if (Array.isArray(svc.device_cgroup_rules) && svc.device_cgroup_rules.length) {
+      throw composeFail(`сервис ${name}: device_cgroup_rules запрещён`);
+    }
+    if (Array.isArray(svc.security_opt) && svc.security_opt.some((opt) =>
+      /^(?:(?:seccomp|apparmor)[=:]unconfined|label[=:]disable)$/i.test(String(opt).trim()))) {
+      throw composeFail(`сервис ${name}: отключение seccomp/AppArmor/SELinux запрещено`);
+    }
     if (svc.extends && typeof svc.extends === 'object' && svc.extends.file) {
       throw composeFail(`сервис ${name}: extends на внешний файл запрещён`);
     }
-    // build.context: только внутри каталога сайта (контекст уезжает в docker build).
-    const ctx = svc.build && (typeof svc.build === 'string' ? svc.build : svc.build.context);
+    validateEnvFiles(dir, composeDir, name, svc.env_file);
+    validateLabelFiles(dir, composeDir, name, svc.label_file);
+    validateCredentialSpec(dir, composeDir, name, svc.credential_spec);
+    // build.context/dockerfile/additional_contexts: локальные пути только внутри
+    // каталога сайта. Иначе BuildKit получает произвольный каталог хоста и
+    // Dockerfile может скопировать его содержимое в образ.
+    const build = svc.build;
+    const ctx = build && (typeof build === 'string' ? build : build.context);
     if (ctx !== undefined && ctx !== null) {
       const ctxStr = String(ctx);
-      if (path.isAbsolute(ctxStr) || !resolvedInside(dir, composeDir, ctxStr)) {
-        throw composeFail(`сервис ${name}: build.context "${ctxStr}" вне каталога сайта запрещён`);
+      if (!isRemoteComposeContext(ctxStr)) {
+        validateComposeFilePath(dir, composeDir, ctxStr, `сервис ${name}: build.context`);
       }
+    }
+    if (build && typeof build === 'object' && !Array.isArray(build)) {
+      if (build.dockerfile !== undefined) {
+        // Относительный dockerfile считается от build.context. Для удалённого
+        // контекста локальный файл вообще не нужен: проверяем лишь, что это не
+        // абсолютный путь хоста.
+        const contextString = build.context === undefined ? '.' : String(build.context);
+        const dockerfileBase = isRemoteComposeContext(contextString)
+          ? composeDir
+          : path.resolve(composeDir, contextString);
+        validateComposeFilePath(dir, dockerfileBase, build.dockerfile, `сервис ${name}: build.dockerfile`);
+      }
+      validateAdditionalContexts(dir, composeDir, name, build.additional_contexts);
     }
     // volumes: именованные тома и tmpfs разрешены; bind — только внутрь каталога сайта.
     const vols = Array.isArray(svc.volumes) ? svc.volumes : [];
@@ -476,7 +672,14 @@ function validateComposeSafety(dir, relPath) {
       let src = null;
       let explicitBind = false;
       if (typeof v === 'string' || typeof v === 'number') {
-        const parts = String(v).split(':');
+        const raw = String(v);
+        // На Windows первый ':' отделяет букву диска, а не container target.
+        // Разбор через split(':') иначе превращал C:\host:/dst в именованный
+        // том "C" и обходил проверку абсолютного bind.
+        if (/^[A-Za-z]:[\\/]/.test(raw) || /^\\\\/.test(raw)) {
+          throw composeFail(`сервис ${name}: абсолютный bind "${raw}" запрещён`);
+        }
+        const parts = raw.split(':');
         if (parts.length === 1) continue; // анонимный том контейнера
         src = parts[0];
       } else if (v && typeof v === 'object') {

@@ -13,6 +13,7 @@ const FAILS_TO_ALERT = 2;
 
 const history = new Map(); // siteId -> [{t, ok, ms, code}] (в памяти, до 100 точек)
 const HISTORY_MAX = 100;
+const CHECK_CONCURRENCY = 5;
 
 // Телеметрия (health/fails) живёт ТОЛЬКО здесь (M-02): раньше она писалась в
 // записи сайта, и db.json целиком переписывался на диске каждые 30 с даже без
@@ -117,14 +118,28 @@ async function checkSite(site) {
 // интервала, накладывался на следующий и умножал работу.
 let tickRunning = false;
 
-async function tick() {
+/** Обработать список фиксированным пулом без создания промиса на каждый сайт. */
+async function forEachLimited(items, limit, worker) {
+  let next = 0;
+  const runners = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      await worker(items[index]);
+    }
+  });
+  await Promise.all(runners);
+}
+
+async function tick(check = checkSite) {
   if (tickRunning) return;
   tickRunning = true;
   try {
-    for (const site of store.state.sites) {
+    // Один зависший сайт ждёт до 5с. Последовательный sweep на десятках сайтов
+    // устаревал на минуты; небольшой пул ускоряет его, не создавая всплеск сокетов.
+    await forEachLimited([...store.state.sites], CHECK_CONCURRENCY, async (site) => {
       if (site.status === 'running' || site.status === 'crashed') {
         try {
-          const point = await checkSite(site);
+          const point = await check(site);
           pushHistory(site.id, point);
           await evalSiteAlerts(site, point);
         } catch {
@@ -134,7 +149,7 @@ async function tick() {
         // Ручная остановка — глушим алерт без сообщения о восстановлении.
         alerts.siteSilentClear(site.id);
       }
-    }
+    });
   } finally {
     tickRunning = false;
   }
@@ -222,4 +237,4 @@ function getHistory(siteId) {
   return history.get(siteId) || [];
 }
 
-module.exports = { start, tick, checkSite, statsFor, getHistory, healthFor, forgetSite };
+module.exports = { CHECK_CONCURRENCY, start, tick, checkSite, statsFor, getHistory, healthFor, forgetSite };

@@ -10,7 +10,28 @@ const os = require('os');
 const path = require('path');
 
 const cronMgr = require('../src/sites/cron');
+const { withSiteLock } = require('../src/sites/lock');
 const { startPanel, api, waitFor, makeZip } = require('./helpers/panel');
+
+function cronUnitSandbox(t, prefix) {
+  const { config } = require('../src/config');
+  const store = require('../src/store');
+  const manager = require('../src/sites/manager');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const originalSitesDir = config.sitesDir;
+  const originalSave = store.save;
+  const originalAppendLog = manager.appendLog;
+  config.sitesDir = tmp;
+  store.save = () => {};
+  manager.appendLog = () => {};
+  t.after(() => {
+    config.sitesDir = originalSitesDir;
+    store.save = originalSave;
+    manager.appendLog = originalAppendLog;
+    try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch { /* noop */ }
+  });
+  return { tmp };
+}
 
 /* ---------- Разбор cron-выражений ---------- */
 
@@ -42,6 +63,72 @@ test('cronMatches: диапазоны со шагом и невалидные в
   assert.throws(() => cronMgr.assertSchedule('60 * * * *'), { status: 400 }, 'минуты 60');
   assert.throws(() => cronMgr.assertSchedule('* * * * 8'), { status: 400 }, 'день недели 8');
   assert.throws(() => cronMgr.assertSchedule('a * * * *'), { status: 400 });
+});
+
+test('cron: spawn error записывается один раз при error + close', async (t) => {
+  const { tmp } = cronUnitSandbox(t, 'sitepanel-cron-error-');
+  const site = { id: 'spawn-error', name: 'spawn-error' };
+  const dir = path.join(tmp, site.id);
+  fs.mkdirSync(dir, { recursive: true });
+  const job = { id: 'job-error', name: 'Ошибка запуска', command: 'node -e "0"', timeoutSec: 5, history: [] };
+
+  // runJob успевает проверить каталог, затем callback блокировки стартует в
+  // microtask. Удаление cwd в этом окне заставляет spawn выдать error, а потом close.
+  const running = cronMgr.runJob(site, job);
+  fs.rmSync(dir, { recursive: true, force: true });
+  await assert.rejects(running);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(job.history.length, 1, 'error и close не должны дважды писать результат');
+  assert.equal(job.lastStatus, 'failed');
+  assert.ok(job.lastError, 'исходная ошибка spawn должна сохраниться');
+});
+
+test('cron: timeout завершает всё дерево процессов', async (t) => {
+  const { tmp } = cronUnitSandbox(t, 'sitepanel-cron-tree-');
+  const site = { id: 'tree-timeout', name: 'tree-timeout' };
+  const dir = path.join(tmp, site.id);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'grandchild.js'), [
+    "process.on('SIGTERM', () => {});",
+    "setTimeout(() => require('fs').writeFileSync('orphan-marker.txt', 'alive'), 3000);",
+    'setInterval(() => {}, 1000);',
+  ].join('\n'));
+  fs.writeFileSync(path.join(dir, 'parent.js'), [
+    "const fs = require('fs');",
+    "const { spawn } = require('child_process');",
+    "const child = spawn(process.execPath, ['grandchild.js'], { cwd: __dirname, stdio: 'ignore', windowsHide: true });",
+    "fs.writeFileSync('grandchild.pid', String(child.pid));",
+    'setInterval(() => {}, 1000);',
+  ].join('\n'));
+
+  t.after(() => {
+    try {
+      const pid = Number(fs.readFileSync(path.join(dir, 'grandchild.pid'), 'utf8'));
+      if (Number.isInteger(pid) && pid > 0) process.kill(pid, 'SIGKILL');
+    } catch { /* уже завершён */ }
+  });
+
+  const command = `"${process.execPath}" parent.js`;
+  const job = { id: 'job-tree', name: 'Дерево', command, timeoutSec: 1, history: [] };
+  const running = cronMgr.runJob(site, job);
+  let aliveAfterRelease = null;
+  let markerAfterRelease = null;
+  const afterCron = withSiteLock(site.id, () => {
+    const pid = Number(fs.readFileSync(path.join(dir, 'grandchild.pid'), 'utf8'));
+    try {
+      process.kill(pid, 0);
+      aliveAfterRelease = true;
+    } catch {
+      aliveAfterRelease = false;
+    }
+    markerAfterRelease = fs.existsSync(path.join(dir, 'orphan-marker.txt'));
+  });
+  await assert.rejects(running, /таймаут/i);
+  await afterCron;
+  assert.equal(aliveAfterRelease, false, 'site lock освободился до завершения потомка');
+  assert.equal(markerAfterRelease, false, 'потомок записал файл до завершения cron-задачи');
+  assert.equal(job.history.length, 1, 'timeout должен записать один результат');
+  assert.match(job.lastError, /таймаут/i);
 });
 
 /* ---------- E2E ---------- */

@@ -61,7 +61,7 @@
 
     <div class="main-wrap">
       <header class="topbar">
-        <button class="icon-btn mobile-only" id="menuBtn" aria-label="Открыть меню"><svg class="icon"><use href="#i-menu"/></svg></button>
+        <button class="icon-btn mobile-only" id="menuBtn" aria-label="Открыть меню" aria-controls="sidebar" aria-expanded="false"><svg class="icon"><use href="#i-menu"/></svg></button>
         <div class="crumb" id="crumb" aria-label="Раздел">Панель</div>
         <div class="topbar-right">
           <span class="sysinfo" id="sysInfo"></span>
@@ -80,7 +80,7 @@
         </div>
       </header>
 
-      <main id="app"></main>
+      <main id="app" aria-busy="false"></main>
 
       <footer class="footer">SitePanel — панель управления сайтами</footer>
     </div>
@@ -120,7 +120,7 @@
             <input type="text" name="gitSubdir" placeholder="monitor" autocomplete="off">
           </label>
           <label>Токен доступа (для приватных репозиториев)
-            <input type="text" name="gitToken" placeholder="github_pat_... или ghp_..." autocomplete="off">
+            <input type="password" name="gitToken" placeholder="github_pat_... или ghp_..." autocomplete="new-password">
           </label>
         </div>
         <label class="checkbox"><input type="checkbox" name="autoStart" checked> Запускать автоматически при старте панели</label>

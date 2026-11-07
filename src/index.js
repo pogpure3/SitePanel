@@ -173,7 +173,7 @@ async function main() {
   console.log('');
   console.log('  SitePanel запущен. Каталог данных: ' + config.dataDir);
 
-  const shutdown = (signal) => {
+  const shutdown = async (signal) => {
     // Идемпотентность: второй Ctrl+C/SIGTERM не должен повторно флашить реестр
     // и заводить второй таймер выхода (SP-25). Повторный сигнал = «выходим сейчас».
     if (shuttingDown) {
@@ -184,24 +184,12 @@ async function main() {
     console.log(`\n  Остановка (${signal})...`);
     // Веб-терминал: гасим открытые shell-сессии до убийства процессов сайтов.
     try { terminal.shutdown(); } catch { /* сессий могло не быть */ }
-    // Глушим процессы напрямую, не трогая статусы: кто был running —
-    // останется running в db и поднимется при следующем старте панели.
-    const pids = [];
-    for (const site of store.state.sites) {
-      const proc = manager.getProcessInfo(site);
-      if (proc && proc.child && proc.child.exitCode === null && proc.child.signalCode === null) {
-        proc.stopping = true;
-        pids.push(proc.child.pid);
-        try {
-          if (process.platform === 'win32') {
-            require('child_process').spawn('taskkill', ['/pid', String(proc.child.pid), '/T', '/F'], { windowsHide: true });
-          } else {
-            process.kill(-proc.child.pid, 'SIGTERM');
-          }
-        } catch {
-          /* уже мёртв */
-        }
-      }
+    // Новые соединения больше не принимаем, пока завершаем процессы сайтов.
+    // Активные сокеты не ждём бесконечно: после освобождения портов сайтов всё
+    // равно завершим процесс панели.
+    for (const server of [adminServer, servers.httpServer, servers.httpsServer]) {
+      try { server.close(); } catch { /* сервер мог не слушать */ }
+      try { server.closeAllConnections(); } catch { /* Node без этого метода */ }
     }
     // Ошибку записи в обработчике сигнала глотать нельзя: без этого шатдаун
     // выглядел успешным при несохранённых изменениях (SP-06).
@@ -209,12 +197,6 @@ async function main() {
       store.flush();
     } catch (err) {
       console.error('[panel] реестр не сохранён при остановке:', err.message);
-    }
-    // Замок снимаем до выхода: иначе следующий штатный запуск ругался бы на
-    // «уже запущен другой экземпляр» от собственного предыдущего pid (SP-08).
-    if (lockHeld) {
-      instancelock.release(config.instanceLockFile);
-      lockHeld = false;
     }
     // Install/build-подпроцессы деплоя живут вне `processes` сайтов, поэтому
     // раньше переживали остановку панели и продолжали писать в data/tmp (SP-05).
@@ -224,27 +206,27 @@ async function main() {
     } catch (err) {
       console.error('[panel] не удалось погасить подпроцессы деплоя:', err.message);
     }
-    // Даём детям шанс завершиться, затем добиваем: без эскалации осиротевший
-    // npm/node держал бы порты и следующий старт получил бы EADDRINUSE (SP-09).
-    const KILL_AFTER_MS = 3000;
-    const EXIT_AFTER_MS = 5000;
-    setTimeout(() => {
-      for (const pid of pids) {
-        try {
-          if (process.platform === 'win32') {
-            require('child_process').spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
-          } else {
-            process.kill(-pid, 'SIGKILL');
-          }
-        } catch {
-          /* уже мёртв */
-        }
-      }
-    }, KILL_AFTER_MS).unref();
-    setTimeout(() => process.exit(0), EXIT_AFTER_MS);
+    // Не выходим, пока taskkill либо TERM→KILL не завершили дерево и порт сайта
+    // не стал свободен. Иначе следующий boot получает EADDRINUSE (SP-09).
+    await manager.shutdownProcesses();
+    // Замок снимаем только после остановки сайтов: новый экземпляр не должен
+    // стартовать параллельно с ещё завершающимися деревьями старого.
+    if (lockHeld) {
+      instancelock.release(config.instanceLockFile);
+      lockHeld = false;
+    }
+    process.exit(0);
   };
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => { shutdown('SIGINT').catch((err) => console.error('[panel] ошибка остановки:', err.message)); });
+  process.on('SIGTERM', () => { shutdown('SIGTERM').catch((err) => console.error('[panel] ошибка остановки:', err.message)); });
+  // Windows не умеет доставлять SIGTERM другому процессу Node: process.kill()
+  // завершает его принудительно. IPC даёт тестам и процессу-надсмотрщику точный
+  // эквивалент штатного сигнала, проходящий через тот же shutdown.
+  process.on('message', (message) => {
+    if (message && message.type === 'sitepanel-shutdown') {
+      shutdown('IPC').catch((err) => console.error('[panel] ошибка остановки:', err.message));
+    }
+  });
 }
 
 main().catch((err) => {

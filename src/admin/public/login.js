@@ -88,6 +88,8 @@
     title.textContent = heading;
     hint.hidden = view !== form;
     showError('');
+    var focusTarget = view.querySelector('input:not([type="hidden"]), button:not([disabled])');
+    if (focusTarget) focusTarget.focus();
   }
 
   function postJson(url, body) {

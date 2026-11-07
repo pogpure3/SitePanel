@@ -414,10 +414,11 @@ function upgradeHashIfNeeded(password) {
     // только усложнила бы разбор инцидентов.
     const fresh = hashPassword(password, auth.salt, SCRYPT_OPTS);
     const wasN = cur.N;
-    auth = { user: auth.user, salt: fresh.salt, hash: fresh.hash, opts: SCRYPT_OPTS };
+    const nextAuth = { user: auth.user, salt: fresh.salt, hash: fresh.hash, opts: SCRYPT_OPTS };
+    persistAuth(nextAuth);
+    auth = nextAuth;
     invalidateVerifyCache();
     verifyCacheSet(auth.user, password);
-    persist();
     console.log(`[auth] хеш пароля обновлён до N=${SCRYPT_OPTS.N} (был N=${wasN})`);
   } catch (err) {
     console.error(`[auth] не удалось обновить хеш пароля (вход по-прежнему работает): ${err.message}`);
@@ -457,12 +458,15 @@ function changePassword(newUser, password) {
   }
   // `opts` хранится в памяти отдельно от `params` в файле: первое — рабочие
   // параметры scrypt, второе — их проекция для записи.
-  auth = { user, ...hashPassword(password, undefined, SCRYPT_OPTS), opts: SCRYPT_OPTS };
+  const nextAuth = { user, ...hashPassword(password, undefined, SCRYPT_OPTS), opts: SCRYPT_OPTS };
+  // Сначала durable commit. Если запись не удалась, прежние пароль, кэш и
+  // сессии остаются полностью рабочими — HTTP-маршрут честно вернёт ошибку.
+  persistAuth(nextAuth);
+  auth = nextAuth;
   // Прежние успешные проверки больше не действительны.
   invalidateVerifyCache();
   // Сессии формы входа выданы на старые учётные данные — гасим все разом.
   destroyAllSessions();
-  persist();
   console.log(`[auth] пароль изменён (логин: ${JSON.stringify(user)})`);
   return { user };
 }
@@ -472,9 +476,13 @@ function changePassword(newUser, password) {
  * рабочие параметры с `maxmem` — деталь реализации, в хранилище им не место.
  */
 function persist() {
+  persistAuth(auth);
+}
+
+function persistAuth(record) {
   secure.writePrivate(
     config.authFile,
-    JSON.stringify({ user: auth.user, salt: auth.salt, hash: auth.hash, params: optsToParams(auth.opts || SCRYPT_OPTS) }, null, 2)
+    JSON.stringify({ user: record.user, salt: record.salt, hash: record.hash, params: optsToParams(record.opts || SCRYPT_OPTS) }, null, 2)
   );
 }
 

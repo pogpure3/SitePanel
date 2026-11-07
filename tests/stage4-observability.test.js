@@ -98,6 +98,46 @@ test('M-03: forgetSite удаляет историю, телеметрию и к
   assert.equal(monitor.healthFor(id).status, 'unknown', 'телеметрия пережила удаление (M-03)');
 });
 
+test('M-02: sweep монитора ограничивает параллелизм и не перекрывается', async () => {
+  const store = require('../src/store');
+  const monitor = require('../src/monitor');
+  const prefix = 'monitor-pool-' + Date.now() + '-';
+  const sites = Array.from({ length: monitor.CHECK_CONCURRENCY * 2 + 2 }, (_, i) => ({
+    id: prefix + i,
+    name: prefix + i,
+    type: 'static',
+    status: 'crashed',
+    domains: [],
+    port: null,
+  }));
+  const originalSites = store.state.sites;
+  store.state.sites = sites;
+
+  let active = 0;
+  let maxActive = 0;
+  let calls = 0;
+  const fakeCheck = async () => {
+    calls++;
+    active++;
+    maxActive = Math.max(maxActive, active);
+    await sleep(30);
+    active--;
+    return { t: Date.now(), ok: false, ms: 30, code: 0 };
+  };
+
+  try {
+    const first = monitor.tick(fakeCheck);
+    const overlapping = monitor.tick(fakeCheck);
+    await Promise.all([first, overlapping]);
+    assert.equal(calls, sites.length, 'перекрывшийся sweep повторно запустил проверки');
+    assert.ok(maxActive > 1, 'проверки остались последовательными');
+    assert.ok(maxActive <= monitor.CHECK_CONCURRENCY, `пул превысил лимит: ${maxActive}`);
+  } finally {
+    store.state.sites = originalSites;
+    for (const site of sites) monitor.forgetSite(site.id);
+  }
+});
+
 /* ---------- M-04: hardenDataDir однократно и точечно ---------- */
 
 test('M-04: hardenDataDir выполняется один раз по маркеру', async (t) => {

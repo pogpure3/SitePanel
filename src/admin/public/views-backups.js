@@ -91,10 +91,10 @@ async function renderBackups() {
     <td>${b.trigger === 'scheduled' ? 'По расписанию' : 'Вручную'}</td>
     <td>${fmtDate(b.ts)}</td>
     <td class="fm-actions">
-      <a href="/api/sites/${siteId}/backups/${encodeURIComponent(b.name)}/download" title="Скачать">⬇</a>
-      <button data-restore="${esc(b.name)}" title="Восстановить">↩</button>
-      <button data-sync="${esc(b.name)}" title="Скопировать на внешний сервер" ${data.remote && data.remote.enabled ? '' : 'hidden'}>☁</button>
-      <button data-del="${esc(b.name)}" title="Удалить">✕</button>
+      <a href="/api/sites/${siteId}/backups/${encodeURIComponent(b.name)}/download" title="Скачать" aria-label="Скачать ${esc(b.name)}">⬇</a>
+      <button data-restore="${esc(b.name)}" title="Восстановить" aria-label="Восстановить ${esc(b.name)}">↩</button>
+      <button data-sync="${esc(b.name)}" title="Скопировать на внешний сервер" aria-label="Скопировать ${esc(b.name)} на внешний сервер" ${data.remote && data.remote.enabled ? '' : 'hidden'}>☁</button>
+      <button data-del="${esc(b.name)}" title="Удалить" aria-label="Удалить ${esc(b.name)}">✕</button>
     </td>
   </tr>`).join('');
 
@@ -107,7 +107,7 @@ async function renderBackups() {
       <div class="fm-bar">
         <span class="hint">Хранится: ${data.totals.count} · ${fmtBytes(data.totals.sizeBytes)}</span>
         <span style="flex:1"></span>
-        <button class="btn btn-sm" id="bkRefresh" title="Обновить">🔄</button>
+        <button class="btn btn-sm" id="bkRefresh" title="Обновить" aria-label="Обновить список бэкапов">🔄</button>
         <label class="hint" for="bkScope">Состав</label>
         <select id="bkScope" aria-label="Состав бэкапа">
           <option value="site">Файлы сайта</option>
@@ -117,10 +117,12 @@ async function renderBackups() {
         <button class="btn btn-sm btn-primary" id="bkNow">💾 Создать сейчас</button>
         <button class="btn btn-sm" id="bkSchedule">⚙ Расписание</button>
       </div>
-      <table class="fm-table">
-        <thead><tr><th>Бэкап</th><th style="width:90px">Размер</th><th style="width:120px">Состав</th><th style="width:130px">Триггер</th><th style="width:130px">Создан</th><th style="width:150px"></th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="fm-table">
+          <thead><tr><th>Бэкап</th><th style="width:90px">Размер</th><th style="width:120px">Состав</th><th style="width:130px">Триггер</th><th style="width:130px">Создан</th><th style="width:150px"></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
       ${data.backups.length ? '' : '<p class="hint" style="margin-top:10px">Бэкапов ещё нет — создайте первый вручную или включите расписание.</p>'}
       <p class="hint" style="margin-top:10px">«Файлы сайта» не включают данные из <code>data/</code> и <code>deploy/data/</code>. «База данных» включает только эти каталоги. Состав планового бэкапа выбирается в расписании. При восстановлении сайт будет остановлен и запущен снова.</p>
     </div>
