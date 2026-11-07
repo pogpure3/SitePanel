@@ -8,6 +8,48 @@
 
 ---
 
+## 2026-11-07 — Деплой `63fc4c5` на panel_test
+
+**Запрос.** Развернуть уже проверенный и запушенный коммит `63fc4c5` на
+стендах SitePanel.
+
+**Диагностика.** До обновления `panel_test` (`46.29.164.250`, Ubuntu 26.04.1
+LTS) был active, `/healthz` отвечал 200, сайт `pfportal` и Node-сайт `monitor`
+имели статус running. Четыре Docker-контейнера работали три дня. Код панели
+отличался от `63fc4c5`; `package-lock.json` имел SHA-256
+`229ed15d46b7eb472cf827004812906f9ce86fe06fc901294fc64dd5576265f6`.
+`panel_beget` (`141.133.197.43`) не отвечает на TCP 22/80/443; SSH получил
+таймаут. `beget.evil-mesh.ru`, `pg.evil-mesh.ru` и `m.evil-mesh.ru` возвращают
+NXDOMAIN, поэтому выкладка на этот стенд невозможна.
+
+**Изменения.** Из коммита `63fc4c50f5207ce966c0d02992c5da83c3dbd55a`
+создан архив `src`, `package.json`, `package-lock.json` с SHA-256
+`099daf995ed110be8f003ed81b186bd733da80d8415b966a3927bc7b56c18cda`.
+На `panel_test` зависимости заранее установлены командой
+`npm ci --omit=dev` в `/opt/sitepanel-release-63fc4c5-20261107T1755Z`.
+Перед подменой создан бэкап
+`/root/sitepanel-before-63fc4c5-20261107-205649.tar.gz` с SHA-256
+`e4daf8e24341ee8d9b7eb7ddc7779dbaad2e0dc423c5394850a222f8ddd82829`.
+Предыдущие каталоги сохранены для отката как
+`/opt/sitepanel/src.rollback-20261107-205649` и
+`/opt/sitepanel/node_modules.rollback-20261107-205649`; предыдущие package-файлы
+лежат рядом с суффиксом `.bak.20261107-205649`. После штатного
+`systemctl stop sitepanel` код и зависимости заменены, служба запущена.
+
+**Проверка.** `systemctl is-active sitepanel` = active; локальный и публичный
+`/healthz` вернули 200. SHA-256 серверных `package-lock.json` и `src/index.js`
+совпали с коммитом: `47dd19d0bc1e45341c662e786af02c4a1d28047ee67fefa287e48b8c32d09c8f`
+и `be5b121706ea8038dc31267be33acd7822e681836a5226a1fa31ba97bfb1e28a`.
+Админское API без сессии вернуло ожидаемый 401. `portal.evil-mesh.ru` вернул
+200, защищённый `mon.evil-mesh.ru` — ожидаемый 401. Node-сайт получил новый PID
+и остался running. Четыре Docker-контейнера сохранили прежние ID и uptime;
+warning/error в journal после запуска нет. Staging-проверка зависимостей:
+0 high/critical и 3 moderate (`archiver -> readdir-glob -> minimatch`).
+
+**Осталось.** `panel_beget` не обновлён: сервер и DNS недоступны. Точный интервал
+недоступности админки и Node-сайта не измерялся; Docker-сайты во время рестарта
+панели продолжали работать, но её proxy кратко не принимал новые соединения.
+
 ## 2026-11-07 — Полный ECC-аудит безопасности, устойчивости и UI/UX
 
 **Запрос.** Проанализировать SitePanel с нуля силами ECC-агентов и улучшить
